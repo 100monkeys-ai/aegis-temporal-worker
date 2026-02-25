@@ -15,6 +15,18 @@ const app = express();
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 
+function getSingleParam(param: string | string[] | undefined): string | null {
+  if (typeof param === 'string') {
+    return param;
+  }
+
+  if (Array.isArray(param) && param.length > 0) {
+    return param[0] ?? null;
+  }
+
+  return null;
+}
+
 // Health check endpoint
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
@@ -62,7 +74,13 @@ app.post('/register-workflow', async (req: Request, res: Response) => {
 // Called by Rust orchestrator to verify registration
 app.get('/workflows/:id', async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = getSingleParam(req.params.id);
+
+    if (!id) {
+      return res.status(400).json({
+        error: 'Invalid workflow ID',
+      });
+    }
 
     const definition = await database.getWorkflowDefinition(id);
 
@@ -109,7 +127,13 @@ app.get('/workflows', async (_req: Request, res: Response) => {
 // Delete workflow endpoint
 app.delete('/workflows/:id', async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = getSingleParam(req.params.id);
+
+    if (!id) {
+      return res.status(400).json({
+        error: 'Invalid workflow ID',
+      });
+    }
 
     await database.deleteWorkflowDefinition(id);
     workflowRegistry.unregisterWorkflow(id);

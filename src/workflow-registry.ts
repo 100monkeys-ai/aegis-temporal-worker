@@ -6,11 +6,13 @@
 
 import { logger } from './logger.js';
 import { createWorkflowFromDefinition, getWorkflowName } from './workflow-generator.js';
-import type { TemporalWorkflowDefinition } from './types.js';
+import type { TemporalWorkflowDefinition, WorkflowInput, WorkflowResult } from './types.js';
+
+type WorkflowFunction = (input: WorkflowInput) => Promise<WorkflowResult>;
 
 class WorkflowRegistry {
   private workflows: Map<string, TemporalWorkflowDefinition> = new Map();
-  private workflowFunctions: Map<string, Function> = new Map();
+  private workflowFunctions: Map<string, WorkflowFunction> = new Map();
 
   /**
    * Register a workflow definition and generate TypeScript workflow function
@@ -41,14 +43,14 @@ class WorkflowRegistry {
   /**
    * Get workflow function by workflow name (Temporal compatible)
    */
-  getWorkflowFunction(workflowName: string): Function | undefined {
+  getWorkflowFunction(workflowName: string): WorkflowFunction | undefined {
     return this.workflowFunctions.get(workflowName);
   }
 
   /**
    * Get all workflow functions for Temporal worker registration
    */
-  getAllWorkflowFunctions(): Record<string, Function> {
+  getAllWorkflowFunctions(): Record<string, WorkflowFunction> {
     return Object.fromEntries(this.workflowFunctions.entries());
   }
 

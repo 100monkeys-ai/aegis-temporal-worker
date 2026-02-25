@@ -17,7 +17,7 @@ RUN npm ci
 
 # Copy source and proto
 COPY src ./src
-COPY proto ./proto
+COPY aegis-proto ./aegis-proto
 
 # Build TypeScript → dist/
 RUN npm run build

@@ -21,9 +21,9 @@ import type {
 } from '../types.js';
 
 // Load protobuf definition
-// In Docker: /app/proto/aegis_runtime.proto
-// In development: ../../proto/aegis_runtime.proto (from aegis-temporal-worker/src/grpc/)
-const PROTO_PATH = process.env.PROTO_PATH || '../../proto/aegis_runtime.proto';
+// In Docker: /app/aegis-proto/proto/aegis_runtime.proto
+// In development (from repo root): ./aegis-proto/proto/aegis_runtime.proto
+const PROTO_PATH = process.env.PROTO_PATH || './aegis-proto/proto/aegis_runtime.proto';
 
 const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
   keepCase: true,
