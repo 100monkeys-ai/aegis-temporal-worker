@@ -19,7 +19,7 @@ export interface PublishEventParams {
  * Uses native fetch to send HTTP POST request to /v1/temporal-events.
  */
 export async function publishEventActivity(params: PublishEventParams): Promise<void> {
-  const orchestratorUrl = process.env.AEGIS_ORCHESTRATOR_URL || 'http://localhost:8000';
+  const orchestratorUrl = process.env.AEGIS_ORCHESTRATOR_URL || 'http://localhost:8088';
   const endpoint = `${orchestratorUrl}/v1/temporal-events`;
 
   logger.info(

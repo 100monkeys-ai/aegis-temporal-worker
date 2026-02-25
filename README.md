@@ -87,7 +87,7 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `TEMPORAL_TASK_QUEUE` | `aegis-agents` | Worker task queue name |
 | `DATABASE_URL` | *(required)* | PostgreSQL connection string |
 | `AEGIS_RUNTIME_GRPC_URL` | `localhost:50051` | Rust AegisRuntime gRPC address |
-| `AEGIS_ORCHESTRATOR_URL` | `http://localhost:8000` | Rust orchestrator HTTP (for event callbacks) |
+| `AEGIS_ORCHESTRATOR_URL` | `http://localhost:8088` | Rust orchestrator HTTP (for event callbacks) |
 | `HTTP_PORT` | `3000` | Worker HTTP API port |
 | `PROTO_PATH` | `./aegis-proto/proto/aegis_runtime.proto` | Path to gRPC proto file |
 | `LOG_LEVEL` | `info` | Pino log level (`trace`/`debug`/`info`/`warn`/`error`) |
@@ -104,7 +104,7 @@ temporal-worker:
     TEMPORAL_ADDRESS: temporal:7233
     DATABASE_URL: postgresql://temporal:temporal@postgres:5432/aegis
     AEGIS_RUNTIME_GRPC_URL: aegis-runtime:50051
-    AEGIS_ORCHESTRATOR_URL: http://aegis-runtime:8000
+    AEGIS_ORCHESTRATOR_URL: http://aegis-runtime:8088
   ports:
     - "3000:3000"
 ```
