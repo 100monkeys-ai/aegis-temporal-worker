@@ -5,7 +5,7 @@ on:
     branches:
       - main       # Publishes :latest
     tags:
-      - 'v*.*.*'   # Publishes semver tag (e.g. v0.2.0) + re-tags as :latest
+      - '*.*.*'   # Publishes semver tag (e.g. 0.2.0) + re-tags as :latest
 
 env:
   REGISTRY: ghcr.io
