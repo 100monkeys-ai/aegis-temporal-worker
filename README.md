@@ -188,8 +188,8 @@ npm start             # Run compiled output
 npm run dev:all       # Hot-reload both server + worker
 npm run lint          # ESLint
 npm run format        # Prettier
-npm test              # Jest
-npm run test:watch    # Jest in watch mode
+npm test              # Vitest
+npm run test:watch    # Vitest in watch mode
 ```
 
 ## Proto File
