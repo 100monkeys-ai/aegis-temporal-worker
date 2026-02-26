@@ -98,8 +98,6 @@ Key source files:
 | `src/grpc/client.ts` | gRPC client for AegisRuntime service |
 | `aegis-proto/proto/aegis_runtime.proto` | gRPC service definition (git submodule) |
 
-See [ADR-022](https://github.com/100monkeys-ai/aegis-architecture/blob/main/adrs/022-temporal-workflow-engine-integration.md) for the full architectural decision record.
-
 ## Contribution Workflow
 
 1. **Create a feature branch**

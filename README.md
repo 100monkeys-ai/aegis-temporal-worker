@@ -8,7 +8,7 @@ TypeScript-based Temporal Worker for AEGIS workflow orchestration. Part of the [
 
 ## Overview
 
-The AEGIS Temporal Worker is the **infrastructure layer** of the Workflow Orchestration bounded context ([ADR-022](https://github.com/100monkeys-ai/aegis-architecture/blob/main/adrs/022-temporal-workflow-engine-integration.md)). It dynamically generates and executes [Temporal](https://temporal.io) workflows from AEGIS YAML workflow definitions, bridging the Rust domain model to Temporal's durable execution engine.
+The AEGIS Temporal Worker is the **infrastructure layer** of the Workflow Orchestration bounded context. It dynamically generates and executes [Temporal](https://temporal.io) workflows from AEGIS YAML workflow definitions, bridging the Rust domain model to Temporal's durable execution engine.
 
 ```markdown
 AEGIS YAML Manifest
