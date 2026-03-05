@@ -28,7 +28,7 @@ By participating in this project you agree to abide by our [Code of Conduct](COD
 
 - **Node.js** 20+
 - **npm** 9+
-- **PostgreSQL** 15+ (for workflow registry)
+- **PostgreSQL** 15+
 - **Temporal Server** (run locally via `temporal server start-dev` or the compose stack in [aegis-examples](https://github.com/100monkeys-ai/aegis-examples))
 - **AEGIS Runtime** — the Rust gRPC service (`aegis-orchestrator`)
 

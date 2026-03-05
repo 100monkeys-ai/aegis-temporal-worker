@@ -36,7 +36,7 @@ TemporalWorkflowDefinition (JSON)
 
 - **Generic Interpreter Workflow** — a single Temporal workflow (`aegis_workflow`) interprets all AEGIS FSM definitions at runtime; no code generation needed
 - **Dynamic workflow registration** — POST a JSON definition to `/register-workflow`; no worker restart required
-- **Multi-worker coordination** — PostgreSQL-backed workflow registry ensures all worker replicas share the same definitions
+- **Multi-worker coordination** — PostgreSQL ensures all worker replicas share the same definitions
 - **Full activity suite** — `executeAgentActivity`, `executeSystemCommandActivity`, `validateOutputActivity`, `executeParallelAgentsActivity`
 - **Event bridge** — publishes `WorkflowStateEntered`, `IterationStarted`, `RefinementApplied`, etc. back to the Rust orchestrator so they become typed domain events
 
@@ -161,7 +161,7 @@ aegis-temporal-worker/
 │   ├── config.ts                  # Zod-validated environment configuration
 │   ├── logger.ts                  # Pino structured logger
 │   ├── types.ts                   # TypeScript type definitions
-│   ├── database.ts                # PostgreSQL client (workflow registry persistence)
+│   ├── database.ts                # PostgreSQL client
 │   ├── server.ts                  # Express HTTP server (workflow registration API)
 │   ├── worker.ts                  # Temporal worker initialization
 │   ├── workflow-registry.ts       # In-memory workflow function registry

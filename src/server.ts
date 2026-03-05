@@ -7,7 +7,6 @@ import express, { type Request, type Response } from 'express';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { database } from './database.js';
-import { workflowRegistry } from './workflow-registry.js';
 import type { TemporalWorkflowDefinition } from './types.js';
 
 const app = express();
@@ -50,9 +49,6 @@ app.post('/register-workflow', async (req: Request, res: Response) => {
 
     // Save to database (for multi-worker coordination)
     await database.saveWorkflowDefinition(definition);
-
-    // Register with workflow registry (generates TypeScript workflow function)
-    await workflowRegistry.registerWorkflow(definition);
 
     logger.info({ workflow_id: definition.workflow_id, name: definition.name }, 'Workflow registered successfully');
 
@@ -136,7 +132,6 @@ app.delete('/workflows/:id', async (req: Request, res: Response) => {
     }
 
     await database.deleteWorkflowDefinition(id);
-    workflowRegistry.unregisterWorkflow(id);
 
     logger.info({ workflow_id: id }, 'Workflow deleted');
 

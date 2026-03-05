@@ -17,7 +17,9 @@ import type {
   QueryCortexRequest,
   QueryCortexResponse,
   StoreCortexPatternRequest,
-  StoreCortexPatternResponse
+  StoreCortexPatternResponse,
+  StoreTrajectoryPatternRequest,
+  StoreTrajectoryPatternResponse,
 } from '../types.js';
 
 // Load protobuf definition
@@ -101,7 +103,7 @@ class AegisRuntimeClient {
           logger.error({ error }, 'Validation with judges failed');
           reject(error);
         } else {
-          logger.info({ final_score: response.final_score, confidence: response.confidence }, 'Validation completed');
+          logger.info({ score: response.score, confidence: response.confidence, binary_valid: response.binary_valid }, 'Validation completed');
           resolve(response);
         }
       });
@@ -136,6 +138,23 @@ class AegisRuntimeClient {
           reject(error);
         } else {
           logger.info({ pattern_id: response.pattern_id }, 'Cortex pattern stored');
+          resolve(response);
+        }
+      });
+    });
+  }
+
+  /**
+   * Store a trajectory pattern in Cortex (ADR-049 Pillar 2)
+   */
+  async storeTrajectoryPattern(request: StoreTrajectoryPatternRequest): Promise<StoreTrajectoryPatternResponse> {
+    return new Promise((resolve, reject) => {
+      this.client.StoreTrajectoryPattern(request, (error: Error | null, response: StoreTrajectoryPatternResponse) => {
+        if (error) {
+          logger.error({ error }, 'Trajectory pattern storage failed');
+          reject(error);
+        } else {
+          logger.info({ new_weight: response.new_weight }, 'Trajectory pattern stored');
           resolve(response);
         }
       });

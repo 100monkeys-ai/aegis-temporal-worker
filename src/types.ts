@@ -16,6 +16,18 @@ export interface TemporalWorkflowDefinition {
 }
 
 /**
+ * Judge configuration for per-state validation (ADR-016, ADR-049)
+ */
+export interface JudgeConfig {
+  /** Agent identifier that will be spawned as a child execution */
+  agent_id: string;
+  /** Optional Handlebars input template for this judge */
+  input_template?: string;
+  /** Consensus weight for this judge (default: 1.0) */
+  weight?: number;
+}
+
+/**
  * Individual state in the workflow FSM
  */
 export interface WorkflowState {
@@ -26,6 +38,14 @@ export interface WorkflowState {
   input?: string;
   isolation?: 'firecracker' | 'docker' | 'process';
   timeout?: string;
+
+  // Agent inner-loop validation (ADR-016 / ADR-017)
+  /** Judges that validate each iteration output before advancing (per-state YAML declaration) */
+  judges?: JudgeConfig[];
+  /** Maximum iterations for the 100monkeys inner refinement loop (default: 10) */
+  max_iterations?: number;
+  /** Optional judge agent ID for pre-execution semantic tool validation (ADR-049 Pillar 1) */
+  pre_execution_validator?: string;
 
   // System-specific fields
   command?: string;
@@ -39,6 +59,8 @@ export interface WorkflowState {
   // ParallelAgents-specific fields
   agents?: ParallelAgentConfig[];
   consensus?: ConsensusConfig;
+  /** Explicit judge agents for ParallelAgents consensus validation (ADR-016) */
+  judges_for_parallel?: JudgeConfig[];
 
   // Transitions
   transitions: TransitionRule[];
@@ -75,6 +97,7 @@ export interface TransitionRule {
   condition: TransitionCondition;
   target: string | null; // null for terminal states
   threshold?: number;
+  agreement?: number;
   min?: number;
   max?: number;
   exit_code?: number;
@@ -98,6 +121,7 @@ export type TransitionCondition =
   | 'score_between'
   | 'confidence_above'
   | 'score_and_confidence_above'
+  | 'consensus'
   | 'all_approved'
   | 'any_rejected'
   | 'input_equals'
@@ -200,6 +224,11 @@ export interface ExecuteAgentRequest {
   input?: string;
   context_json: string;
   timeout_seconds?: number;
+  /** Maps to proto field workflow_execution_id (field 5). Used to link the child
+   * execution back to the workflow execution in the Rust orchestrator so it can
+   * be tracked under the correct WorkflowExecution aggregate.
+   * NOTE: gRPC loader uses keepCase:true, so the name must match the proto exactly. */
+  workflow_execution_id?: string;
 }
 
 /**
@@ -243,20 +272,45 @@ export interface ExecuteSystemCommandResponse {
 
 /**
  * Request to validate with judge agents
+ * Field names match the proto definition (aegis_runtime.proto ValidateRequest)
  */
 export interface ValidateRequest {
-  agent_output: string;
-  judge_agent_ids: string[];
-  context: Record<string, string>;
+  /** The agent output to evaluate */
+  output: string;
+  /** Task description / evaluation criteria */
+  task?: string;
+  /** Judge agents to run (maps to repeated JudgeConfig in proto) */
+  judges: JudgeConfig[];
+  /** Consensus strategy configuration */
+  consensus?: {
+    strategy: string;
+    threshold?: number;
+    agreement?: number;
+    n?: number;
+  };
+  /** Serialized JSON context string */
+  context_json?: string;
 }
 
 /**
  * Response from validation
+ * Field names match the proto definition (aegis_runtime.proto ValidateResponse)
  */
 export interface ValidateResponse {
-  final_score: number;
+  score: number;             // 0.0 - 1.0
+  confidence: number;        // 0.0 - 1.0
+  reasoning: string;
+  binary_valid: boolean;
+  individual_results: JudgeResult[];
+}
+
+/**
+ * Individual judge result
+ */
+export interface JudgeResult {
+  judge_id: string;
+  score: number;
   confidence: number;
-  individual_scores: number[];
   reasoning: string;
 }
 
@@ -287,18 +341,62 @@ export interface QueryCortexResponse {
 }
 
 /**
- * Request to store a pattern in Cortex (STUBBED)
+ * Request to store a pattern in Cortex
+ * Field names match proto StoreCortexPatternRequest
  */
 export interface StoreCortexPatternRequest {
   error_signature: string;
+  error_type?: string;
+  error_message?: string;
   solution_approach: string;
-  agent_id: string;
-  execution_id: string;
+  solution_code?: string;
+  agent_id?: string;
+  tags?: string[];
 }
 
 /**
- * Response from storing Cortex pattern (STUBBED)
+ * Response from storing Cortex pattern
  */
 export interface StoreCortexPatternResponse {
   pattern_id: string;
+  deduplicated: boolean;
+  new_frequency: number;
+}
+
+// ============================================================================
+// ADR-049: Trajectory Pattern Types
+// ============================================================================
+
+/**
+ * A single step in a tool-use trajectory
+ * Matches proto TrajectoryStep
+ */
+export interface TrajectoryStep {
+  /** Name of the tool that was invoked (e.g. 'cmd.run', 'filesystem.write') */
+  tool_name: string;
+  /** JSON-serialized arguments passed to the tool */
+  arguments_json: string;
+}
+
+/**
+ * Request to store a successful tool-use trajectory in Cortex (ADR-049 Pillar 2)
+ * Matches proto StoreTrajectoryPatternRequest
+ */
+export interface StoreTrajectoryPatternRequest {
+  /** Task description or execution_id used as deduplication key */
+  task_signature: string;
+  /** Ordered sequence of tool calls that led to success */
+  steps: TrajectoryStep[];
+  /** Validation score that triggered trajectory capture (0.0–1.0) */
+  success_score: number;
+}
+
+/**
+ * Response from storing a trajectory pattern
+ * Matches proto StoreTrajectoryPatternResponse
+ */
+export interface StoreTrajectoryPatternResponse {
+  trajectory_id: string;
+  new_weight: number;
+  deduplicated: boolean;
 }
