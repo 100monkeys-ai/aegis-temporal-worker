@@ -20,6 +20,8 @@ const {
     storeTrajectoryPatternActivity,
     fetchWorkflowDefinition,
     publishEventActivity,
+    executeContainerRunActivity,
+    executeParallelContainerRunActivity,
 } = proxyActivities<typeof activities>({
     startToCloseTimeout: '10 minutes',
     retry: {
@@ -358,6 +360,106 @@ async function executeState(
                     threshold: state.consensus.threshold ?? 0.7
                 }
             });
+
+        case 'ContainerRun': {
+            if (!state.container_run_image || !state.container_run_command) {
+                throw new Error(`Invalid ContainerRun state '${stateName}': missing image or command`);
+            }
+
+            const crEnv: Record<string, string> = {};
+            if (state.container_run_env) {
+                for (const [k, v] of Object.entries(state.container_run_env)) {
+                    crEnv[k] = renderTemplate(String(v), blackboard);
+                }
+            }
+
+            await emit('ContainerRunStarted', {
+                state_name: stateName,
+                name: state.container_run_name,
+                image: state.container_run_image,
+            });
+
+            const crResult = await executeContainerRunActivity({
+                execution_id: executionId,
+                state_name: stateName,
+                name: state.container_run_name ?? stateName,
+                image: state.container_run_image,
+                image_pull_policy: state.container_run_image_pull_policy,
+                command: state.container_run_command,
+                env: crEnv,
+                workdir: state.container_run_workdir,
+                volumes: state.container_run_volumes ?? [],
+                resources: state.container_run_resources,
+                registry_credentials: state.container_run_registry_credentials,
+                shell: state.container_run_shell ?? false,
+                max_attempts: state.container_run_retry?.max_attempts ?? 1,
+            });
+
+            if (crResult.exit_code === 0) {
+                await emit('ContainerRunCompleted', {
+                    state_name: stateName,
+                    exit_code: crResult.exit_code,
+                    duration_ms: crResult.duration_ms,
+                    attempts: crResult.attempts,
+                });
+            } else {
+                await emit('ContainerRunFailed', {
+                    state_name: stateName,
+                    exit_code: crResult.exit_code,
+                    stderr: crResult.stderr,
+                    duration_ms: crResult.duration_ms,
+                    attempts: crResult.attempts,
+                });
+            }
+
+            return {
+                exit_code: crResult.exit_code,
+                stdout: crResult.stdout,
+                stderr: crResult.stderr,
+                duration_ms: crResult.duration_ms,
+                attempts: crResult.attempts,
+            };
+        }
+
+        case 'ParallelContainerRun': {
+            if (!state.parallel_container_steps || state.parallel_container_steps.length === 0) {
+                throw new Error(`Invalid ParallelContainerRun state '${stateName}': no steps defined`);
+            }
+
+            const renderedSteps = state.parallel_container_steps.map((step) => ({
+                ...step,
+                env: step.env
+                    ? Object.fromEntries(
+                          Object.entries(step.env).map(([k, v]) => [k, renderTemplate(String(v), blackboard)])
+                      )
+                    : undefined,
+            }));
+
+            await emit('ContainerRunStarted', {
+                state_name: stateName,
+                step_count: renderedSteps.length,
+                completion: state.parallel_container_completion ?? 'all_succeed',
+            });
+
+            const pcrResult = await executeParallelContainerRunActivity({
+                execution_id: executionId,
+                state_name: stateName,
+                steps: renderedSteps,
+                completion: state.parallel_container_completion ?? 'all_succeed',
+            });
+
+            await emit('ContainerRunCompleted', {
+                state_name: stateName,
+                overall_success: pcrResult.overall_success,
+                step_results: pcrResult.results.map((r) => ({
+                    name: r.name,
+                    exit_code: r.exit_code,
+                    duration_ms: r.duration_ms,
+                })),
+            });
+
+            return pcrResult;
+        }
 
         default:
             throw new Error(`Unknown state kind: ${state.kind}`);

@@ -20,6 +20,8 @@ import type {
   StoreCortexPatternResponse,
   StoreTrajectoryPatternRequest,
   StoreTrajectoryPatternResponse,
+  ExecuteContainerRunRequest,
+  ExecuteContainerRunResponse,
 } from '../types.js';
 
 // Load protobuf definition
@@ -155,6 +157,26 @@ class AegisRuntimeClient {
           reject(error);
         } else {
           logger.info({ new_weight: response.new_weight }, 'Trajectory pattern stored');
+          resolve(response);
+        }
+      });
+    });
+  }
+
+  /**
+   * Execute a deterministic container step without an LLM loop (ADR-050)
+   */
+  async executeContainerRun(request: ExecuteContainerRunRequest): Promise<ExecuteContainerRunResponse> {
+    return new Promise((resolve, reject) => {
+      this.client.ExecuteContainerRun(request, (error: Error | null, response: ExecuteContainerRunResponse) => {
+        if (error) {
+          logger.error({ error, state_name: request.state_name }, 'Container run execution failed');
+          reject(error);
+        } else {
+          logger.info(
+            { exit_code: response.exit_code, attempts: response.attempts, state_name: request.state_name },
+            'Container run completed'
+          );
           resolve(response);
         }
       });

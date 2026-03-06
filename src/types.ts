@@ -4,6 +4,98 @@
  */
 
 /**
+ * Storage class for a workflow-level volume declaration (ADR-050)
+ */
+export type WorkflowStorageClass = 'ephemeral' | 'persistent';
+
+/**
+ * Named volume declared in spec.volumes (ADR-050)
+ * Forwarded from Rust TemporalWorkflowDefinition.spec_volumes.
+ */
+export interface WorkflowVolumeSpec {
+  name: string;
+  storage_class: WorkflowStorageClass;
+  size_limit_bytes?: number;
+}
+
+/**
+ * Volume mount binding for a ContainerRun step (ADR-050)
+ * References a volume declared in spec.volumes by name.
+ */
+export interface ContainerVolumeMount {
+  name: string;
+  mount_path: string;
+  read_only: boolean;
+}
+
+/**
+ * Resource limits for a ContainerRun step (ADR-050)
+ */
+export interface ContainerResources {
+  /** CPU quota in millicores (e.g. 1000 = 1 vCPU) */
+  cpu?: number;
+  /** Memory limit as a string (e.g. "512Mi", "2Gi") */
+  memory?: string;
+  /** Wall-clock timeout as a human-readable duration string (e.g. "10m", "1h") */
+  timeout?: string;
+}
+
+/**
+ * Retry configuration for a ContainerRun step (ADR-050)
+ */
+export interface RetryConfig {
+  max_attempts?: number;
+  backoff?: string;
+}
+
+/**
+ * Configuration for a single step in ParallelContainerRun (ADR-050)
+ */
+export interface ContainerRunConfig {
+  name: string;
+  image: string;
+  command: string[];
+  env?: Record<string, string>;
+  workdir?: string;
+  volumes?: ContainerVolumeMount[];
+  resources?: ContainerResources;
+  registry_credentials?: string;
+  shell?: boolean;
+}
+
+/**
+ * gRPC request for ExecuteContainerRun (ADR-050)
+ * Maps directly to proto ExecuteContainerRunRequest.
+ */
+export interface ExecuteContainerRunRequest {
+  execution_id: string;
+  name: string;
+  image: string;
+  image_pull_policy?: string;
+  command: string[];
+  env?: Record<string, string>;
+  workdir?: string;
+  volumes?: ContainerVolumeMount[];
+  resources?: ContainerResources;
+  registry_credentials?: string;
+  shell?: boolean;
+  state_name: string;
+  max_attempts?: number;
+}
+
+/**
+ * gRPC response from ExecuteContainerRun (ADR-050)
+ * Maps directly to proto ExecuteContainerRunResponse.
+ */
+export interface ExecuteContainerRunResponse {
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  duration_ms: number;
+  attempts: number;
+}
+
+/**
  * Temporal Workflow Definition generated from AEGIS YAML
  */
 export interface TemporalWorkflowDefinition {
@@ -13,6 +105,8 @@ export interface TemporalWorkflowDefinition {
   initial_state: string;
   context: Record<string, any>;
   states: Record<string, WorkflowState>;
+  /** Named volume declarations from spec.volumes (ADR-050) */
+  spec_volumes?: WorkflowVolumeSpec[];
 }
 
 /**
@@ -62,6 +156,23 @@ export interface WorkflowState {
   /** Explicit judge agents for ParallelAgents consensus validation (ADR-016) */
   judges_for_parallel?: JudgeConfig[];
 
+  // ContainerRun-specific fields (ADR-050)
+  container_run_name?: string;
+  container_run_image?: string;
+  container_run_image_pull_policy?: string;
+  container_run_command?: string[];
+  container_run_env?: Record<string, string>;
+  container_run_workdir?: string;
+  container_run_volumes?: ContainerVolumeMount[];
+  container_run_resources?: ContainerResources;
+  container_run_registry_credentials?: string;
+  container_run_retry?: RetryConfig;
+  container_run_shell?: boolean;
+
+  // ParallelContainerRun-specific fields (ADR-050)
+  parallel_container_steps?: ContainerRunConfig[];
+  parallel_container_completion?: 'all_succeed' | 'any_succeed' | 'best_effort';
+
   // Transitions
   transitions: TransitionRule[];
 }
@@ -69,7 +180,7 @@ export interface WorkflowState {
 /**
  * State kind enum
  */
-export type StateKind = 'Agent' | 'System' | 'Human' | 'ParallelAgents';
+export type StateKind = 'Agent' | 'System' | 'Human' | 'ParallelAgents' | 'ContainerRun' | 'ParallelContainerRun';
 
 /**
  * Parallel agent configuration

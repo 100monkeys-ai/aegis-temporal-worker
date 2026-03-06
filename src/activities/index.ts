@@ -12,6 +12,9 @@ import type {
   StoreTrajectoryPatternRequest,
   TrajectoryStep,
   Blackboard,
+  ExecuteContainerRunRequest,
+  ExecuteContainerRunResponse,
+  ContainerRunConfig,
 } from '../types.js';
 import { fetchWorkflowDefinition } from './workflow-activities.js';
 
@@ -257,6 +260,137 @@ export async function storeTrajectoryPatternActivity(params: {
 
 import { publishEventActivity } from './event-activities.js';
 
+/**
+ * Execute a single deterministic container step without an LLM loop (ADR-050)
+ *
+ * Maps to the gRPC ExecuteContainerRun RPC on the Rust AegisRuntime service.
+ * Retry logic is handled inside the Rust use case (RunContainerStepUseCase);
+ * max_attempts controls how many times the orchestrator retries before surfacing failure.
+ */
+export async function executeContainerRunActivity(
+  params: ExecuteContainerRunRequest
+): Promise<ExecuteContainerRunResponse> {
+  logger.info(
+    { state_name: params.state_name, image: params.image },
+    'Executing container run activity'
+  );
+
+  try {
+    const response = await aegisRuntimeClient.executeContainerRun(params);
+    logger.info(
+      { state_name: params.state_name, exit_code: response.exit_code, attempts: response.attempts },
+      'Container run activity completed'
+    );
+    return response;
+  } catch (error) {
+    logger.error({ error, state_name: params.state_name }, 'Container run activity failed');
+    throw error;
+  }
+}
+
+/**
+ * Execute multiple container steps concurrently within a single Temporal activity (ADR-050)
+ *
+ * Fans out via Promise.allSettled so all steps are attempted regardless of individual failures.
+ * The completion strategy is then evaluated to determine the overall outcome:
+ *   - all_succeed  — every step must exit with code 0; any non-zero exit throws
+ *   - any_succeed  — at least one step must exit with code 0; all-failed throws
+ *   - best_effort  — always resolves; per-step failures are surfaced in the output
+ */
+export async function executeParallelContainerRunActivity(params: {
+  execution_id: string;
+  state_name: string;
+  steps: ContainerRunConfig[];
+  completion: 'all_succeed' | 'any_succeed' | 'best_effort';
+  image_pull_policy?: string;
+}): Promise<{
+  results: Array<{ name: string; exit_code: number; stdout: string; stderr: string; duration_ms: number }>;
+  overall_success: boolean;
+}> {
+  logger.info(
+    { state_name: params.state_name, step_count: params.steps.length, completion: params.completion },
+    'Executing parallel container run activity'
+  );
+
+  const settled = await Promise.allSettled(
+    params.steps.map(async (step) => {
+      const request: ExecuteContainerRunRequest = {
+        execution_id: params.execution_id,
+        state_name: params.state_name,
+        name: step.name,
+        image: step.image,
+        image_pull_policy: params.image_pull_policy,
+        command: step.command,
+        env: step.env,
+        workdir: step.workdir,
+        volumes: step.volumes,
+        resources: step.resources,
+        registry_credentials: step.registry_credentials,
+        shell: step.shell ?? false,
+        max_attempts: 1,
+      };
+      const response = await aegisRuntimeClient.executeContainerRun(request);
+      return { name: step.name, ...response };
+    })
+  );
+
+  const results = settled.map((r, i) => {
+    if (r.status === 'fulfilled') {
+      return r.value;
+    }
+    // Rejected promise — surface as a non-zero exit code so transition conditions can route on it
+    logger.error(
+      { step: params.steps[i].name, error: r.reason },
+      'Parallel container step failed with exception'
+    );
+    return {
+      name: params.steps[i].name,
+      exit_code: 1,
+      stdout: '',
+      stderr: r.reason instanceof Error ? r.reason.message : String(r.reason),
+      duration_ms: 0,
+    };
+  });
+
+  const successCount = results.filter((r) => r.exit_code === 0).length;
+
+  let overall_success: boolean;
+  switch (params.completion) {
+    case 'all_succeed':
+      overall_success = successCount === results.length;
+      if (!overall_success) {
+        const failed = results.filter((r) => r.exit_code !== 0).map((r) => r.name);
+        throw new Error(
+          `ParallelContainerRun (all_succeed): steps failed: ${failed.join(', ')}`
+        );
+      }
+      break;
+    case 'any_succeed':
+      overall_success = successCount > 0;
+      if (!overall_success) {
+        throw new Error('ParallelContainerRun (any_succeed): all steps failed');
+      }
+      break;
+    case 'best_effort':
+    default:
+      overall_success = successCount > 0;
+      break;
+  }
+
+  logger.info(
+    {
+      state_name: params.state_name,
+      total: results.length,
+      succeeded: successCount,
+      completion: params.completion,
+      overall_success,
+    },
+    'Parallel container run activity completed'
+  );
+
+  return { results, overall_success };
+}
+
 // Ensure all activities are exported for Temporal Worker
 export const activities = {
   executeAgentActivity,
@@ -266,6 +400,8 @@ export const activities = {
   storeTrajectoryPatternActivity,
   fetchWorkflowDefinition,
   publishEventActivity,
+  executeContainerRunActivity,
+  executeParallelContainerRunActivity,
 };
 
 export { fetchWorkflowDefinition, publishEventActivity };
