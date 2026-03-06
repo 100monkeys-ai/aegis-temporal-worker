@@ -306,6 +306,9 @@ export async function executeParallelContainerRunActivity(params: {
 }): Promise<{
   results: Array<{ name: string; exit_code: number; stdout: string; stderr: string; duration_ms: number }>;
   overall_success: boolean;
+  succeeded: number;
+  failed: number;
+  completion: 'all_succeed' | 'any_succeed' | 'best_effort';
 }> {
   logger.info(
     { state_name: params.state_name, step_count: params.steps.length, completion: params.completion },
@@ -358,22 +361,13 @@ export async function executeParallelContainerRunActivity(params: {
   switch (params.completion) {
     case 'all_succeed':
       overall_success = successCount === results.length;
-      if (!overall_success) {
-        const failed = results.filter((r) => r.exit_code !== 0).map((r) => r.name);
-        throw new Error(
-          `ParallelContainerRun (all_succeed): steps failed: ${failed.join(', ')}`
-        );
-      }
       break;
     case 'any_succeed':
       overall_success = successCount > 0;
-      if (!overall_success) {
-        throw new Error('ParallelContainerRun (any_succeed): all steps failed');
-      }
       break;
     case 'best_effort':
     default:
-      overall_success = successCount > 0;
+      overall_success = true;
       break;
   }
 
@@ -382,13 +376,20 @@ export async function executeParallelContainerRunActivity(params: {
       state_name: params.state_name,
       total: results.length,
       succeeded: successCount,
+      failed: results.length - successCount,
       completion: params.completion,
       overall_success,
     },
     'Parallel container run activity completed'
   );
 
-  return { results, overall_success };
+  return {
+    results,
+    overall_success,
+    succeeded: successCount,
+    failed: results.length - successCount,
+    completion: params.completion,
+  };
 }
 
 // Ensure all activities are exported for Temporal Worker

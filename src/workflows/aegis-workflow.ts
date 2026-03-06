@@ -1,8 +1,6 @@
 import { proxyActivities, setHandler, defineSignal, condition, workflowInfo } from '@temporalio/workflow';
 import Handlebars from 'handlebars';
 import type {
-    TemporalWorkflowDefinition,
-    WorkflowInput,
     WorkflowResult,
     Blackboard,
     WorkflowState,
@@ -413,6 +411,14 @@ async function executeState(
             }
 
             return {
+                status: crResult.exit_code === 0 ? 'success' : 'failed',
+                output: {
+                    exit_code: crResult.exit_code,
+                    stdout: crResult.stdout,
+                    stderr: crResult.stderr,
+                    duration_ms: crResult.duration_ms,
+                    attempts: crResult.attempts,
+                },
                 exit_code: crResult.exit_code,
                 stdout: crResult.stdout,
                 stderr: crResult.stderr,
@@ -448,17 +454,52 @@ async function executeState(
                 completion: state.parallel_container_completion ?? 'all_succeed',
             });
 
-            await emit('ContainerRunCompleted', {
-                state_name: stateName,
-                overall_success: pcrResult.overall_success,
-                step_results: pcrResult.results.map((r) => ({
-                    name: r.name,
+            const byStep = Object.fromEntries(
+                pcrResult.results.map((r) => [r.name, {
                     exit_code: r.exit_code,
+                    stdout: r.stdout,
+                    stderr: r.stderr,
                     duration_ms: r.duration_ms,
-                })),
-            });
+                }])
+            );
 
-            return pcrResult;
+            if (pcrResult.overall_success) {
+                await emit('ContainerRunCompleted', {
+                    state_name: stateName,
+                    overall_success: pcrResult.overall_success,
+                    completion: pcrResult.completion,
+                    succeeded: pcrResult.succeeded,
+                    failed: pcrResult.failed,
+                    step_results: pcrResult.results.map((r) => ({
+                        name: r.name,
+                        exit_code: r.exit_code,
+                        duration_ms: r.duration_ms,
+                    })),
+                });
+            } else {
+                await emit('ContainerRunFailed', {
+                    state_name: stateName,
+                    overall_success: pcrResult.overall_success,
+                    completion: pcrResult.completion,
+                    succeeded: pcrResult.succeeded,
+                    failed: pcrResult.failed,
+                    step_results: pcrResult.results.map((r) => ({
+                        name: r.name,
+                        exit_code: r.exit_code,
+                        stderr: r.stderr,
+                    })),
+                });
+            }
+
+            return {
+                status: pcrResult.overall_success ? 'success' : 'failed',
+                overall_success: pcrResult.overall_success,
+                completion: pcrResult.completion,
+                succeeded: pcrResult.succeeded,
+                failed: pcrResult.failed,
+                output: byStep,
+                results: pcrResult.results,
+            };
         }
 
         default:
@@ -480,13 +521,33 @@ async function evaluateTransitions(
 }
 
 async function evaluateCondition(t: TransitionRule, output: any, bb: Blackboard): Promise<boolean> {
+    const resolvedExitCode =
+        typeof output?.exit_code === 'number'
+            ? output.exit_code
+            : typeof output?.output?.exit_code === 'number'
+            ? output.output.exit_code
+            : undefined;
+
+    const resolvedStatus = output?.status;
+
     switch (t.condition) {
         case 'always': return true;
-        case 'on_success': return output?.status === 'completed' || output?.status === 'success';
-        case 'on_failure': return output?.status === 'failed' || output?.status === 'error';
-        case 'exit_code_zero': return output?.exit_code === 0;
-        case 'exit_code_non_zero': return output?.exit_code !== 0;
-        case 'exit_code': return output?.exit_code === t.exit_code;
+        case 'on_success':
+            return resolvedStatus === 'completed' ||
+                resolvedStatus === 'success' ||
+                resolvedExitCode === 0 ||
+                output?.overall_success === true;
+        case 'on_failure':
+            return resolvedStatus === 'failed' ||
+                resolvedStatus === 'error' ||
+                (typeof resolvedExitCode === 'number' && resolvedExitCode !== 0) ||
+                output?.overall_success === false;
+        case 'exit_code_zero':
+            return resolvedExitCode === 0;
+        case 'exit_code_non_zero':
+            return typeof resolvedExitCode === 'number' && resolvedExitCode !== 0;
+        case 'exit_code':
+            return typeof resolvedExitCode === 'number' && resolvedExitCode === t.exit_code;
         case 'score_above': return (output?.score || output?.final_score || 0) > (t.threshold || 0);
         case 'score_below': return (output?.score || output?.final_score || 0) < (t.threshold || 1);
         case 'score_between':
@@ -516,7 +577,7 @@ async function evaluateCondition(t: TransitionRule, output: any, bb: Blackboard)
             try {
                 const tmpl = `{{#if ${t.expression}}}true{{else}}false{{/if}}`;
                 return renderTemplate(tmpl, { ...bb, state_output: output }).trim() === 'true';
-            } catch (error) {
+            } catch {
                 // If custom handlebar evaluation throws, we assume false to prevent FSM crash
                 return false;
             }
