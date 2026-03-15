@@ -18,6 +18,40 @@ import type {
 } from '../types.js';
 import { fetchWorkflowDefinition } from './workflow-activities.js';
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve an agent name to its UUID via the orchestrator REST API.
+ * If the value is already a UUID it is returned as-is (fast path).
+ * Phase 1c safety net: deploy-time resolution in register_workflow.rs (Phase 1a)
+ * and gRPC-side lookup in server.rs (Phase 1b) handle most cases; this provides
+ * a final defence for any path that bypasses those layers.
+ */
+async function resolveAgentId(nameOrId: string): Promise<string> {
+  if (UUID_PATTERN.test(nameOrId)) {
+    return nameOrId;
+  }
+  logger.warn({ agent_name: nameOrId }, 'agent_id is not a UUID — resolving via REST');
+  const orchestratorUrl =
+    process.env.AEGIS_ORCHESTRATOR_URL || 'http://localhost:8088';
+  const resp = await fetch(
+    `${orchestratorUrl}/v1/agents/lookup/${encodeURIComponent(nameOrId)}`,
+  );
+  if (!resp.ok) {
+    throw new Error(
+      `Agent '${nameOrId}' not found (HTTP ${resp.status}). ` +
+        `Deploy it with 'aegis agent deploy' before running this workflow.`,
+    );
+  }
+  const data = (await resp.json()) as { agent_id: string };
+  logger.info(
+    { agent_name: nameOrId, resolved_id: data.agent_id },
+    'Resolved agent name to UUID',
+  );
+  return data.agent_id;
+}
+
 /**
  * Execute an agent via Rust ExecutionService
  */
@@ -29,8 +63,10 @@ export async function executeAgentActivity(params: {
 }): Promise<any> {
   logger.info({ agent_id: params.agentId }, 'Executing agent activity');
 
+  const resolvedAgentId = await resolveAgentId(params.agentId);
+
   const request: ExecuteAgentRequest = {
-    agent_id: params.agentId,
+    agent_id: resolvedAgentId,
     input: params.input,
     context_json: JSON.stringify(params.context),
     timeout_seconds: 300,
@@ -158,8 +194,9 @@ export async function executeParallelAgentsActivity(params: {
     // Execute all agents in parallel
     const results = await Promise.all(
       params.agents.map(async (agentConfig) => {
+        const resolvedAgent = await resolveAgentId(agentConfig.agent);
         const events = await aegisRuntimeClient.executeAgent({
-          agent_id: agentConfig.agent,
+          agent_id: resolvedAgent,
           input: agentConfig.input,
           context_json: JSON.stringify({ input: agentConfig.input }),
           timeout_seconds: 300,
