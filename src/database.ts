@@ -50,8 +50,9 @@ export class Database {
     const query = `
       INSERT INTO workflow_definitions (workflow_id, name, definition, registered_at, definition_hash)
       VALUES ($1, $2, $3, NOW(), $4)
-      ON CONFLICT (workflow_id) 
-      DO UPDATE SET 
+      ON CONFLICT (name)
+      DO UPDATE SET
+        workflow_id = EXCLUDED.workflow_id,
         definition = EXCLUDED.definition,
         registered_at = NOW(),
         definition_hash = EXCLUDED.definition_hash
