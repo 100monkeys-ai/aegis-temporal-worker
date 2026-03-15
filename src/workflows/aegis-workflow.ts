@@ -242,14 +242,16 @@ async function executeState(
                     });
 
                     lastOutput = result;
-                    await emit('WorkflowIterationCompleted', {
-                        iteration_number: iteration,
-                        output: result.output
-                    });
 
                     if (result.status !== 'completed') {
+                        // Throw here — the catch block below emits WorkflowIterationFailed
                         throw new Error(`Agent execution failed: ${result.error}`);
                     }
+
+                    await emit('WorkflowIterationCompleted', {
+                        iteration_number: iteration,
+                        output: result.output ?? '',
+                    });
 
                     if (judges.length === 0) {
                         // No judges configured — treat first successful execution as valid.
