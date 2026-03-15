@@ -61,7 +61,34 @@ class AegisRuntimeClient {
 
       const call = this.client.ExecuteAgent(request);
 
-      call.on('data', (event: ExecutionEvent) => {
+      call.on('data', (rawEvent: any) => {
+        // The proto uses `oneof event` which @grpc/proto-loader decodes as:
+        // { event: 'execution_completed', execution_completed: { ... } }
+        // Map it to the flat ExecutionEvent interface expected by activities.
+        const eventCase: string = rawEvent.event ?? '';
+        const inner: any = rawEvent[eventCase] ?? {};
+
+        // Convert snake_case oneof case name to PascalCase event_type
+        // e.g. 'execution_completed' → 'ExecutionCompleted'
+        const eventType = eventCase
+          .split('_')
+          .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+          .join('') as ExecutionEvent['event_type'];
+
+        const event: ExecutionEvent = {
+          event_type: eventType,
+          execution_id: inner.execution_id ?? '',
+          timestamp: inner.started_at ?? inner.completed_at ?? inner.failed_at ?? inner.applied_at ?? new Date().toISOString(),
+          iteration_number: inner.iteration_number,
+          action: inner.action,
+          output: inner.output,
+          error_message: inner.error?.message,
+          code_diff: inner.code_diff,
+          final_output: inner.final_output,
+          reason: inner.reason,
+          total_iterations: inner.total_iterations,
+        };
+
         logger.debug({ event_type: event.event_type }, 'Received execution event');
         events.push(event);
       });
