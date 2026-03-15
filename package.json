@@ -1,6 +1,6 @@
 {
   "name": "aegis-temporal-worker",
-  "version": "0.1.0",
+  "version": "0.11.0-pre-alpha",
   "description": "AEGIS Temporal Worker - Dynamic workflow generation and execution",
   "main": "dist/index.js",
   "type": "module",
