@@ -44,12 +44,12 @@ async function resolveAgentId(nameOrId: string): Promise<string> {
         `Deploy it with 'aegis agent deploy' before running this workflow.`,
     );
   }
-  const data = (await resp.json()) as { agent_id: string };
+  const data = (await resp.json()) as { id: string };
   logger.info(
-    { agent_name: nameOrId, resolved_id: data.agent_id },
+    { agent_name: nameOrId, resolved_id: data.id },
     'Resolved agent name to UUID',
   );
-  return data.agent_id;
+  return data.id;
 }
 
 /**
