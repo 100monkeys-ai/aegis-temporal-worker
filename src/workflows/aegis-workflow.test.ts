@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TemporalWorkflowDefinition } from '../types.js';
 
-const activityMocks = {
+const activityMocks = vi.hoisted(() => ({
   executeAgentActivity: vi.fn(),
   executeSystemCommandActivity: vi.fn(),
   validateOutputActivity: vi.fn(),
@@ -11,7 +11,7 @@ const activityMocks = {
   publishEventActivity: vi.fn(),
   executeContainerRunActivity: vi.fn(),
   executeParallelContainerRunActivity: vi.fn(),
-};
+}));
 
 vi.mock('../activities/index.js', () => activityMocks);
 

@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExecuteContainerRunResponse } from '../types.js';
 
-const executeContainerRunMock = vi.fn();
+const { executeContainerRunMock } = vi.hoisted(() => ({
+  executeContainerRunMock: vi.fn(),
+}));
 
 vi.mock('../grpc/client.js', () => ({
   aegisRuntimeClient: {
@@ -20,6 +22,10 @@ vi.mock('../logger.js', () => ({
     warn: vi.fn(),
     debug: vi.fn(),
   },
+}));
+
+vi.mock('./workflow-activities.js', () => ({
+  fetchWorkflowDefinition: vi.fn(),
 }));
 
 import { executeParallelContainerRunActivity } from './index.js';
