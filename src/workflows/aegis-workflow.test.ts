@@ -214,6 +214,48 @@ describe('aegis_workflow container orchestration behavior', () => {
     expect(testOutput?.['lint']?.exit_code).toBe(0);
   });
 
+  it('merges startup blackboard overrides at top level and preserves workflow metadata', async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          BUILD: {
+            kind: 'Agent',
+            agent: 'builder-agent',
+            input: 'Repo {{repo}} for {{owner}} on {{workflow.name}} {{workflow.branch}}',
+            transitions: [],
+          },
+        },
+        'BUILD'
+      )
+    );
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: 'completed',
+      output: 'done',
+      iterations: 1,
+    });
+
+    const result = await aegis_workflow({
+      workflow_id: 'wf-1',
+      input: { branch: 'main' },
+      blackboard: { owner: 'alice', repo: 'override-repo' },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(activityMocks.executeAgentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: 'Repo override-repo for alice on ci-workflow main',
+        context: expect.objectContaining({
+          owner: 'alice',
+          repo: 'override-repo',
+          workflow: expect.objectContaining({
+            name: 'ci-workflow',
+            branch: 'main',
+          }),
+        }),
+      })
+    );
+  });
+
   it('routes on_failure for ParallelContainerRun when aggregation fails', async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue(
       baseDefinition(

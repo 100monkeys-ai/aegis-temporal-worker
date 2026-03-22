@@ -41,6 +41,7 @@ Handlebars.registerHelper('trim', (str: string) => (str || '').trim());
 interface GenericWorkflowInput {
     workflow_id: string;
     input: Record<string, any>;
+    blackboard?: Record<string, any>;
 }
 
 /**
@@ -51,7 +52,7 @@ interface GenericWorkflowInput {
  * at runtime and executes it step-by-step.
  */
 export async function aegis_workflow(args: GenericWorkflowInput): Promise<WorkflowResult> {
-    const { workflow_id, input } = args;
+    const { workflow_id, input, blackboard: blackboardOverrides } = args;
     const info = workflowInfo();
     const executionId = info.workflowId; // In AEGIS, Temporal workflowId is the Execution UUID
     let temporalSequenceNumber = 1;
@@ -91,6 +92,7 @@ export async function aegis_workflow(args: GenericWorkflowInput): Promise<Workfl
     // 2. Initialize Blackboard
     const blackboard: Blackboard = {
         ...definition.context,
+        ...(blackboardOverrides ?? {}),
         workflow: {
             name: definition.name,
             version: definition.version,
