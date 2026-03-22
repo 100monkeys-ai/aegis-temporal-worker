@@ -77,6 +77,7 @@ export async function executeAgentActivity(params: {
   agentId: string;
   input: string;
   context: Blackboard;
+  workflowExecutionId?: string;
   parentExecutionId?: string;
 }): Promise<any> {
   logger.info({ agent_id: params.agentId }, 'Executing agent activity');
@@ -88,9 +89,15 @@ export async function executeAgentActivity(params: {
     input: params.input,
     context_json: JSON.stringify(params.context),
     timeout_seconds: 300,
-    workflow_execution_id: params.parentExecutionId,
-    parent_execution_id: params.parentExecutionId,
   };
+
+  if (params.workflowExecutionId) {
+    request.workflow_execution_id = params.workflowExecutionId;
+  }
+
+  if (params.parentExecutionId) {
+    request.parent_execution_id = params.parentExecutionId;
+  }
 
   try {
     // Call Rust ExecutionService via gRPC (streaming)

@@ -240,7 +240,7 @@ async function executeState(
                         agentId: state.agent,
                         input: currentInput,
                         context: blackboard,
-                        parentExecutionId: executionId,
+                        workflowExecutionId: executionId,
                     });
 
                     lastOutput = result;

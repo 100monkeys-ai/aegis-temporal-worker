@@ -130,6 +130,49 @@ describe('AegisRuntimeClient.executeAgent', () => {
     ).resolves.not.toBe('still-waiting');
   });
 
+  it('logs the backend failure reason when the runtime stream fails terminally', async () => {
+    const call = new EventEmitter();
+    mocks.executeAgentRpcMock.mockReturnValue(call);
+
+    const { aegisRuntimeClient } = await import('./client.js');
+
+    const promise = aegisRuntimeClient.executeAgent({
+      agent_id: 'agent-1',
+      input: 'plan',
+      context_json: '{}',
+      timeout_seconds: 300,
+    });
+
+    call.emit('data', {
+      event: 'execution_failed',
+      execution_failed: {
+        execution_id: 'exec-3',
+        failed_at: '2026-03-22T08:32:12.572760Z',
+        reason: 'Failed to start execution: Parent execution exec-1 not found',
+        total_iterations: 0,
+      },
+    });
+
+    await expect(promise).resolves.toMatchObject([
+      {
+        event_type: 'ExecutionFailed',
+        execution_id: 'exec-3',
+        reason: 'Failed to start execution: Parent execution exec-1 not found',
+        total_iterations: 0,
+      },
+    ]);
+
+    expect(mocks.logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'ExecutionFailed',
+        event_count: 1,
+        execution_id: 'exec-3',
+        reason: 'Failed to start execution: Parent execution exec-1 not found',
+      }),
+      'Agent execution failed'
+    );
+  });
+
   it('rejects when the runtime stream errors before completion', async () => {
     const call = new EventEmitter();
     mocks.executeAgentRpcMock.mockReturnValue(call);

@@ -1,14 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExecuteContainerRunResponse } from '../types.js';
 
-const { executeContainerRunMock } = vi.hoisted(() => ({
+const { executeContainerRunMock, executeAgentMock } = vi.hoisted(() => ({
   executeContainerRunMock: vi.fn(),
+  executeAgentMock: vi.fn(),
 }));
 
 vi.mock('../grpc/client.js', () => ({
   aegisRuntimeClient: {
     executeContainerRun: executeContainerRunMock,
-    executeAgent: vi.fn(),
+    executeAgent: executeAgentMock,
     executeSystemCommand: vi.fn(),
     validateWithJudges: vi.fn(),
     storeTrajectoryPattern: vi.fn(),
@@ -28,7 +29,7 @@ vi.mock('./workflow-activities.js', () => ({
   fetchWorkflowDefinition: vi.fn(),
 }));
 
-import { executeParallelContainerRunActivity } from './index.js';
+import { executeAgentActivity, executeParallelContainerRunActivity } from './index.js';
 
 function ok(exit_code: number, name = 'step'): ExecuteContainerRunResponse & { name?: string } {
   return {
@@ -40,9 +41,45 @@ function ok(exit_code: number, name = 'step'): ExecuteContainerRunResponse & { n
   };
 }
 
-describe('executeParallelContainerRunActivity', () => {
+describe('Temporal activities', () => {
   beforeEach(() => {
     executeContainerRunMock.mockReset();
+    executeAgentMock.mockReset();
+  });
+
+  it('sends workflow execution lineage without parent execution semantics', async () => {
+    executeAgentMock.mockResolvedValue([
+      {
+        event_type: 'ExecutionCompleted',
+        execution_id: 'child-exec-1',
+        timestamp: '2026-03-22T08:32:12.572760Z',
+        final_output: 'done',
+        total_iterations: 1,
+      },
+    ]);
+
+    const result = await executeAgentActivity({
+      agentId: '123e4567-e89b-12d3-a456-426614174000',
+      input: 'plan',
+      context: {},
+      workflowExecutionId: 'wf-exec-1',
+    });
+
+    expect(result).toMatchObject({
+      status: 'completed',
+      output: 'done',
+      iterations: 1,
+    });
+
+    expect(executeAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent_id: '123e4567-e89b-12d3-a456-426614174000',
+        workflow_execution_id: 'wf-exec-1',
+      })
+    );
+
+    const request = executeAgentMock.mock.calls[0][0];
+    expect(request.parent_execution_id).toBeUndefined();
   });
 
   it('returns failure result (no throw) for all_succeed when any step fails', async () => {
@@ -126,4 +163,3 @@ describe('executeParallelContainerRunActivity', () => {
     expect(lint?.stderr).toContain('grpc unavailable');
   });
 });
-

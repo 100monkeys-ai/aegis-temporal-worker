@@ -323,10 +323,11 @@ describe('aegis_workflow container orchestration behavior', () => {
     expect(executeAgentRpcMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agent_id: '123e4567-e89b-12d3-a456-426614174000',
-        parent_execution_id: 'exec-123',
         workflow_execution_id: 'exec-123',
       })
     );
+    const request = executeAgentRpcMock.mock.calls[0][0];
+    expect(request.parent_execution_id).toBeUndefined();
     expect(result.status).toBe('completed');
     expect(result.final_state).toBe('NEXT');
     expect(result.blackboard?.PLAN?.output?.workflow_prompt).toBe('generate-workflow');

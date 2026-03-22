@@ -105,9 +105,18 @@ class AegisRuntimeClient {
         ) {
           settled = true;
           cleanup();
-          logger.info(
-            { event_type: event.event_type, event_count: events.length },
-            'Agent execution reached terminal event'
+          const terminalLog =
+            event.event_type === 'ExecutionFailed' ? logger.error : logger.info;
+          terminalLog(
+            {
+              event_type: event.event_type,
+              event_count: events.length,
+              execution_id: event.execution_id,
+              reason: event.reason ?? undefined,
+            },
+            event.event_type === 'ExecutionFailed'
+              ? 'Agent execution failed'
+              : 'Agent execution reached terminal event'
           );
           resolve(events);
         }

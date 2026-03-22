@@ -336,13 +336,14 @@ export interface ExecuteAgentRequest {
   input?: string;
   context_json: string;
   timeout_seconds?: number;
-  /** Maps to proto field workflow_execution_id (field 5). Used to link the child
-   * execution back to the workflow execution in the Rust orchestrator so it can
-   * be tracked under the correct WorkflowExecution aggregate.
+  /** Maps to proto field workflow_execution_id (field 5). Used to correlate the
+   * execution with the parent workflow for lineage and observability without
+   * changing execution semantics.
    * NOTE: gRPC loader uses keepCase:true, so the name must match the proto exactly. */
   workflow_execution_id?: string;
-  /** Maps to proto field parent_execution_id (field 6). Used to force the
-   * runtime down the child-execution path for workflow-managed agent states. */
+  /** Maps to proto field parent_execution_id (field 6). Only set for explicit
+   * child-execution spawn paths (for example, judge agents or nested workflow
+   * children). Do not set this for normal workflow-managed agent states. */
   parent_execution_id?: string;
 }
 
