@@ -256,6 +256,45 @@ describe('aegis_workflow container orchestration behavior', () => {
     );
   });
 
+  it('stores Agent output under a nested output field and transitions out of PLAN on completion', async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          PLAN: {
+            kind: 'Agent',
+            agent: 'planner-agent',
+            input: 'plan',
+            transitions: [{ condition: 'on_success', target: 'NEXT' }],
+          },
+          NEXT: {
+            kind: 'System',
+            command: 'echo {{PLAN.output.workflow_prompt}}',
+            transitions: [],
+          },
+        },
+        'PLAN'
+      )
+    );
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: 'completed',
+      output: {
+        workflow_prompt: 'generate-workflow',
+      },
+      iterations: 1,
+    });
+
+    const result = await aegis_workflow({ workflow_id: 'wf-1', input: {} });
+
+    expect(result.status).toBe('completed');
+    expect(result.final_state).toBe('NEXT');
+    expect(result.blackboard?.PLAN?.output?.workflow_prompt).toBe('generate-workflow');
+    expect(activityMocks.executeSystemCommandActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'echo generate-workflow',
+      })
+    );
+  });
+
   it('routes on_failure for ParallelContainerRun when aggregation fails', async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue(
       baseDefinition(
