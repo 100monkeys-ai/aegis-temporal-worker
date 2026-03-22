@@ -28,6 +28,7 @@ import { aegis_workflow } from './aegis-workflow.js';
 function baseDefinition(states: TemporalWorkflowDefinition['states'], initial = 'BUILD'): TemporalWorkflowDefinition {
   return {
     workflow_id: 'wf-1',
+    tenant_id: 'local',
     name: 'ci-workflow',
     version: '1.0.0',
     initial_state: initial,
@@ -70,10 +71,11 @@ describe('aegis_workflow container orchestration behavior', () => {
       attempts: 1,
     });
 
-    const result = await aegis_workflow({ workflow_name: 'ci-workflow', input: {} });
+    const result = await aegis_workflow({ workflow_id: 'wf-1', input: {} });
     const build = result.blackboard?.BUILD;
 
     expect(result.status).toBe('completed');
+    expect(activityMocks.fetchWorkflowDefinition).toHaveBeenCalledWith('wf-1');
     expect(build?.status).toBe('success');
     expect(build?.output?.exit_code).toBe(0);
     expect(build?.output?.stdout).toBe('build-ok');
@@ -108,7 +110,7 @@ describe('aegis_workflow container orchestration behavior', () => {
       attempts: 1,
     });
 
-    const result = await aegis_workflow({ workflow_name: 'ci-workflow', input: {} });
+    const result = await aegis_workflow({ workflow_id: 'wf-1', input: {} });
     expect(result.final_state).toBe('PASS');
   });
 
@@ -140,7 +142,7 @@ describe('aegis_workflow container orchestration behavior', () => {
       attempts: 1,
     });
 
-    const result = await aegis_workflow({ workflow_name: 'ci-workflow', input: {} });
+    const result = await aegis_workflow({ workflow_id: 'wf-1', input: {} });
     expect(result.final_state).toBe('FAIL');
   });
 
@@ -172,7 +174,7 @@ describe('aegis_workflow container orchestration behavior', () => {
       attempts: 1,
     });
 
-    const result = await aegis_workflow({ workflow_name: 'ci-workflow', input: {} });
+    const result = await aegis_workflow({ workflow_id: 'wf-1', input: {} });
     expect(result.final_state).toBe('FAIL');
   });
 
@@ -204,7 +206,7 @@ describe('aegis_workflow container orchestration behavior', () => {
       ],
     });
 
-    const result = await aegis_workflow({ workflow_name: 'ci-workflow', input: {} });
+    const result = await aegis_workflow({ workflow_id: 'wf-1', input: {} });
     const testOutput = result.blackboard?.TEST?.output;
 
     expect(result.status).toBe('completed');
@@ -245,9 +247,8 @@ describe('aegis_workflow container orchestration behavior', () => {
       ],
     });
 
-    const result = await aegis_workflow({ workflow_name: 'ci-workflow', input: {} });
+    const result = await aegis_workflow({ workflow_id: 'wf-1', input: {} });
     expect(result.final_state).toBe('FAIL');
     expect(result.blackboard?.TEST?.status).toBe('failed');
   });
 });
-

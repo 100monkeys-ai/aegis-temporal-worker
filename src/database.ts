@@ -48,9 +48,17 @@ export class Database {
    */
   async saveWorkflowDefinition(definition: TemporalWorkflowDefinition): Promise<void> {
     const query = `
-      INSERT INTO workflow_definitions (workflow_id, name, definition, registered_at, definition_hash)
-      VALUES ($1, $2, $3, NOW(), $4)
-      ON CONFLICT (name)
+      INSERT INTO workflow_definitions (
+        workflow_id,
+        tenant_id,
+        name,
+        version,
+        definition,
+        registered_at,
+        definition_hash
+      )
+      VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+      ON CONFLICT (tenant_id, name, version)
       DO UPDATE SET
         workflow_id = EXCLUDED.workflow_id,
         definition = EXCLUDED.definition,
@@ -63,13 +71,32 @@ export class Database {
     try {
       await this.pool.query(query, [
         definition.workflow_id,
+        definition.tenant_id,
         definition.name,
+        definition.version,
         JSON.stringify(definition),
         definitionHash,
       ]);
-      logger.info({ workflow_id: definition.workflow_id, name: definition.name }, 'Workflow definition saved to database');
+      logger.info(
+        {
+          workflow_id: definition.workflow_id,
+          tenant_id: definition.tenant_id,
+          name: definition.name,
+          version: definition.version,
+        },
+        'Workflow definition saved to database'
+      );
     } catch (error) {
-      logger.error({ error, workflow_id: definition.workflow_id }, 'Failed to save workflow definition');
+      logger.error(
+        {
+          error,
+          workflow_id: definition.workflow_id,
+          tenant_id: definition.tenant_id,
+          name: definition.name,
+          version: definition.version,
+        },
+        'Failed to save workflow definition'
+      );
       throw error;
     }
   }
@@ -88,24 +115,6 @@ export class Database {
       return result.rows[0].definition as TemporalWorkflowDefinition;
     } catch (error) {
       logger.error({ error, workflow_id: workflowId }, 'Failed to load workflow definition');
-      throw error;
-    }
-  }
-
-  /**
-   * Load workflow definition by name
-   */
-  async getWorkflowDefinitionByName(name: string): Promise<TemporalWorkflowDefinition | null> {
-    const query = 'SELECT definition FROM workflow_definitions WHERE name = $1';
-
-    try {
-      const result = await this.pool.query(query, [name]);
-      if (result.rows.length === 0) {
-        return null;
-      }
-      return result.rows[0].definition as TemporalWorkflowDefinition;
-    } catch (error) {
-      logger.error({ error, name }, 'Failed to load workflow definition by name');
       throw error;
     }
   }

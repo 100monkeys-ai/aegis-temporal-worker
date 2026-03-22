@@ -26,6 +26,19 @@ function getSingleParam(param: string | string[] | undefined): string | null {
   return null;
 }
 
+export function isWorkflowDefinitionRegistrationPayload(
+  definition: Partial<TemporalWorkflowDefinition> | null | undefined
+): definition is TemporalWorkflowDefinition {
+  return Boolean(
+    definition &&
+      definition.workflow_id &&
+      definition.tenant_id &&
+      definition.name &&
+      definition.version &&
+      definition.states
+  );
+}
+
 // Health check endpoint
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
@@ -35,27 +48,45 @@ app.get('/health', (_req: Request, res: Response) => {
 // Called by Rust orchestrator after mapping Workflow domain object
 app.post('/register-workflow', async (req: Request, res: Response) => {
   try {
-    const definition: TemporalWorkflowDefinition = req.body;
+    const definition = req.body as Partial<TemporalWorkflowDefinition>;
 
     // Validate definition
-    if (!definition.workflow_id || !definition.name || !definition.states) {
+    if (!isWorkflowDefinitionRegistrationPayload(definition)) {
       return res.status(400).json({
         error: 'Invalid workflow definition',
-        message: 'Missing required fields: workflow_id, name, or states',
+        message: 'Missing required fields: workflow_id, tenant_id, name, version, or states',
       });
     }
 
-    logger.info({ workflow_id: definition.workflow_id, name: definition.name }, 'Registering workflow');
+    logger.info(
+      {
+        workflow_id: definition.workflow_id,
+        tenant_id: definition.tenant_id,
+        name: definition.name,
+        version: definition.version,
+      },
+      'Registering workflow'
+    );
 
     // Save to database (for multi-worker coordination)
     await database.saveWorkflowDefinition(definition);
 
-    logger.info({ workflow_id: definition.workflow_id, name: definition.name }, 'Workflow registered successfully');
+    logger.info(
+      {
+        workflow_id: definition.workflow_id,
+        tenant_id: definition.tenant_id,
+        name: definition.name,
+        version: definition.version,
+      },
+      'Workflow registered successfully'
+    );
 
     res.status(200).json({
       status: 'registered',
       workflow_id: definition.workflow_id,
+      tenant_id: definition.tenant_id,
       name: definition.name,
+      version: definition.version,
     });
   } catch (error) {
     logger.error({ error }, 'Failed to register workflow');

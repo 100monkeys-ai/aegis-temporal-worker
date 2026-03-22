@@ -39,7 +39,7 @@ Handlebars.registerHelper('lower', (str: string) => (str || '').toLowerCase());
 Handlebars.registerHelper('trim', (str: string) => (str || '').trim());
 
 interface GenericWorkflowInput {
-    workflow_name: string;
+    workflow_id: string;
     input: Record<string, any>;
 }
 
@@ -51,12 +51,12 @@ interface GenericWorkflowInput {
  * at runtime and executes it step-by-step.
  */
 export async function aegis_workflow(args: GenericWorkflowInput): Promise<WorkflowResult> {
-    const { workflow_name, input } = args;
+    const { workflow_id, input } = args;
     const info = workflowInfo();
     const executionId = info.workflowId; // In AEGIS, Temporal workflowId is the Execution UUID
     let temporalSequenceNumber = 1;
 
-    let workflowId: string | undefined = undefined;
+    let workflowId: string | undefined = workflow_id;
 
     // Register the humanInput signal at workflow root — MUST be before any await/activity
     // to satisfy Temporal's determinism requirements. A single signal registration covers
@@ -85,7 +85,7 @@ export async function aegis_workflow(args: GenericWorkflowInput): Promise<Workfl
     await emit('WorkflowExecutionStarted');
 
     // 1. Fetch Definition
-    const definition = await fetchWorkflowDefinition(workflow_name);
+    const definition = await fetchWorkflowDefinition(workflow_id);
     workflowId = definition.workflow_id;
 
     // 2. Initialize Blackboard

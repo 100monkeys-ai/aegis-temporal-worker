@@ -100,6 +100,7 @@ export interface ExecuteContainerRunResponse {
  */
 export interface TemporalWorkflowDefinition {
   workflow_id: string;
+  tenant_id: string;
   name: string;
   version: string;
   initial_state: string;
