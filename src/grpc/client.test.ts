@@ -98,6 +98,38 @@ describe('AegisRuntimeClient.executeAgent', () => {
     ]);
   });
 
+  it('resolves as soon as a terminal event arrives, before stream end', async () => {
+    const call = new EventEmitter();
+    mocks.executeAgentRpcMock.mockReturnValue(call);
+
+    const { aegisRuntimeClient } = await import('./client.js');
+
+    const promise = aegisRuntimeClient.executeAgent({
+      agent_id: 'agent-1',
+      input: 'plan',
+      context_json: '{}',
+      timeout_seconds: 300,
+      parent_execution_id: 'parent-1',
+    });
+
+    call.emit('data', {
+      event: 'execution_completed',
+      execution_completed: {
+        execution_id: 'exec-2',
+        completed_at: '2026-03-22T08:32:12.572760Z',
+        final_output: 'done',
+        total_iterations: 1,
+      },
+    });
+
+    await expect(
+      Promise.race([
+        promise,
+        new Promise((resolve) => setTimeout(() => resolve('still-waiting'), 0)),
+      ])
+    ).resolves.not.toBe('still-waiting');
+  });
+
   it('rejects when the runtime stream errors before completion', async () => {
     const call = new EventEmitter();
     mocks.executeAgentRpcMock.mockReturnValue(call);

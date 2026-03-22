@@ -52,6 +52,24 @@ async function resolveAgentId(nameOrId: string): Promise<string> {
   return data.id;
 }
 
+function normalizeAgentOutput(finalOutput: string | undefined): unknown {
+  const rawOutput = finalOutput ?? '';
+  const trimmedOutput = rawOutput.trim();
+
+  if (
+    (trimmedOutput.startsWith('{') && trimmedOutput.endsWith('}')) ||
+    (trimmedOutput.startsWith('[') && trimmedOutput.endsWith(']'))
+  ) {
+    try {
+      return JSON.parse(trimmedOutput);
+    } catch {
+      // Preserve the raw payload if the agent produced non-JSON text that only looks JSON-like.
+    }
+  }
+
+  return rawOutput;
+}
+
 /**
  * Execute an agent via Rust ExecutionService
  */
@@ -70,7 +88,8 @@ export async function executeAgentActivity(params: {
     input: params.input,
     context_json: JSON.stringify(params.context),
     timeout_seconds: 300,
-    workflow_execution_id: params.parentExecutionId,  // proto field 5 (keepCase:true)
+    workflow_execution_id: params.parentExecutionId,
+    parent_execution_id: params.parentExecutionId,
   };
 
   try {
@@ -84,7 +103,7 @@ export async function executeAgentActivity(params: {
     if (completedEvent) {
       return {
         status: 'completed',
-        output: completedEvent.final_output || '',
+        output: normalizeAgentOutput(completedEvent.final_output),
         iterations: completedEvent.total_iterations || 0,
       };
     }

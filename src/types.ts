@@ -341,6 +341,9 @@ export interface ExecuteAgentRequest {
    * be tracked under the correct WorkflowExecution aggregate.
    * NOTE: gRPC loader uses keepCase:true, so the name must match the proto exactly. */
   workflow_execution_id?: string;
+  /** Maps to proto field parent_execution_id (field 6). Used to force the
+   * runtime down the child-execution path for workflow-managed agent states. */
+  parent_execution_id?: string;
 }
 
 /**

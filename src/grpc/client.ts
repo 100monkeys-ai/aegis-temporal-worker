@@ -58,8 +58,15 @@ class AegisRuntimeClient {
   async executeAgent(request: ExecuteAgentRequest): Promise<ExecutionEvent[]> {
     return new Promise((resolve, reject) => {
       const events: ExecutionEvent[] = [];
+      let settled = false;
 
       const call = this.client.ExecuteAgent(request);
+
+      const cleanup = () => {
+        call.removeAllListeners('data');
+        call.removeAllListeners('end');
+        call.removeAllListeners('error');
+      };
 
       call.on('data', (rawEvent: any) => {
         // The proto uses `oneof event` which @grpc/proto-loader decodes as:
@@ -91,14 +98,39 @@ class AegisRuntimeClient {
 
         logger.debug({ event_type: event.event_type }, 'Received execution event');
         events.push(event);
+
+        if (
+          event.event_type === 'ExecutionCompleted' ||
+          event.event_type === 'ExecutionFailed'
+        ) {
+          settled = true;
+          cleanup();
+          logger.info(
+            { event_type: event.event_type, event_count: events.length },
+            'Agent execution reached terminal event'
+          );
+          resolve(events);
+        }
       });
 
       call.on('end', () => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        cleanup();
         logger.info({ event_count: events.length }, 'Agent execution completed');
         resolve(events);
       });
 
       call.on('error', (error: Error) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        cleanup();
         logger.error({ error }, 'Agent execution failed');
         reject(error);
       });

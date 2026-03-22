@@ -1,19 +1,45 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TemporalWorkflowDefinition } from '../types.js';
 
-const activityMocks = vi.hoisted(() => ({
-  executeAgentActivity: vi.fn(),
-  executeSystemCommandActivity: vi.fn(),
-  validateOutputActivity: vi.fn(),
-  executeParallelAgentsActivity: vi.fn(),
-  storeTrajectoryPatternActivity: vi.fn(),
-  fetchWorkflowDefinition: vi.fn(),
-  publishEventActivity: vi.fn(),
-  executeContainerRunActivity: vi.fn(),
-  executeParallelContainerRunActivity: vi.fn(),
+const { activityMocks, executeAgentRpcMock } = vi.hoisted(() => ({
+  activityMocks: {
+    executeAgentActivity: vi.fn(),
+    executeSystemCommandActivity: vi.fn(),
+    validateOutputActivity: vi.fn(),
+    executeParallelAgentsActivity: vi.fn(),
+    storeTrajectoryPatternActivity: vi.fn(),
+    fetchWorkflowDefinition: vi.fn(),
+    publishEventActivity: vi.fn(),
+    executeContainerRunActivity: vi.fn(),
+    executeParallelContainerRunActivity: vi.fn(),
+  },
+  executeAgentRpcMock: vi.fn(),
 }));
 
 vi.mock('../activities/index.js', () => activityMocks);
+
+vi.mock('../activities/workflow-activities.js', () => ({
+  fetchWorkflowDefinition: vi.fn(),
+}));
+
+vi.mock('../grpc/client.js', () => ({
+  aegisRuntimeClient: {
+    executeAgent: executeAgentRpcMock,
+    executeSystemCommand: vi.fn(),
+    validateWithJudges: vi.fn(),
+    storeTrajectoryPattern: vi.fn(),
+    executeContainerRun: vi.fn(),
+  },
+}));
+
+vi.mock('../logger.js', () => ({
+  logger: {
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
 
 vi.mock('@temporalio/workflow', () => ({
   proxyActivities: () => activityMocks,
@@ -42,6 +68,7 @@ describe('aegis_workflow container orchestration behavior', () => {
     for (const fn of Object.values(activityMocks)) {
       fn.mockReset();
     }
+    executeAgentRpcMock.mockReset();
     activityMocks.publishEventActivity.mockResolvedValue(undefined);
     activityMocks.executeSystemCommandActivity.mockResolvedValue({
       status: 'success',
@@ -256,6 +283,60 @@ describe('aegis_workflow container orchestration behavior', () => {
     );
   });
 
+  it('transitions past PLAN when the runtime child execution completes with JSON output', async () => {
+    const actualActivities =
+      await vi.importActual<typeof import('../activities/index.js')>('../activities/index.js');
+
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          PLAN: {
+            kind: 'Agent',
+            agent: '123e4567-e89b-12d3-a456-426614174000',
+            input: 'plan',
+            transitions: [{ condition: 'on_success', target: 'NEXT' }],
+          },
+          NEXT: {
+            kind: 'System',
+            command: 'echo {{PLAN.output.workflow_prompt}}',
+            transitions: [],
+          },
+        },
+        'PLAN'
+      )
+    );
+    activityMocks.executeAgentActivity.mockImplementation(actualActivities.executeAgentActivity);
+    executeAgentRpcMock.mockResolvedValue([
+      {
+        event_type: 'ExecutionCompleted',
+        execution_id: 'child-exec-1',
+        timestamp: '2026-03-22T08:32:12.572760Z',
+        final_output: JSON.stringify({
+          workflow_prompt: 'generate-workflow',
+        }),
+        total_iterations: 1,
+      },
+    ]);
+
+    const result = await aegis_workflow({ workflow_id: 'wf-1', input: {} });
+
+    expect(executeAgentRpcMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent_id: '123e4567-e89b-12d3-a456-426614174000',
+        parent_execution_id: 'exec-123',
+        workflow_execution_id: 'exec-123',
+      })
+    );
+    expect(result.status).toBe('completed');
+    expect(result.final_state).toBe('NEXT');
+    expect(result.blackboard?.PLAN?.output?.workflow_prompt).toBe('generate-workflow');
+    expect(activityMocks.executeSystemCommandActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'echo generate-workflow',
+      })
+    );
+  });
+
   it('stores Agent output under a nested output field and transitions out of PLAN on completion', async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue(
       baseDefinition(
@@ -282,7 +363,7 @@ describe('aegis_workflow container orchestration behavior', () => {
       },
       iterations: 1,
     });
-
+ 
     const result = await aegis_workflow({ workflow_id: 'wf-1', input: {} });
 
     expect(result.status).toBe('completed');
