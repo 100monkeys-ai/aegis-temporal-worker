@@ -96,6 +96,15 @@ describe('AegisRuntimeClient.executeAgent', () => {
         total_iterations: 1,
       },
     ]);
+
+    expect(mocks.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'ExecutionCompleted',
+        event_count: 1,
+        execution_id: 'exec-1',
+      }),
+      'Agent execution reached terminal event'
+    );
   });
 
   it('resolves as soon as a terminal event arrives, before stream end', async () => {
@@ -128,6 +137,15 @@ describe('AegisRuntimeClient.executeAgent', () => {
         new Promise((resolve) => setTimeout(() => resolve('still-waiting'), 0)),
       ])
     ).resolves.not.toBe('still-waiting');
+
+    expect(mocks.logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'ExecutionCompleted',
+        event_count: 1,
+        execution_id: 'exec-2',
+      }),
+      'Agent execution reached terminal event'
+    );
   });
 
   it('logs the backend failure reason when the runtime stream fails terminally', async () => {
