@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TemporalWorkflowDefinition } from '../types.js';
 
-const { activityMocks, executeAgentRpcMock } = vi.hoisted(() => ({
+const { activityMocks, terminalActivityMocks, executeAgentRpcMock } = vi.hoisted(() => ({
   activityMocks: {
     executeAgentActivity: vi.fn(),
     executeSystemCommandActivity: vi.fn(),
@@ -12,6 +12,9 @@ const { activityMocks, executeAgentRpcMock } = vi.hoisted(() => ({
     publishEventActivity: vi.fn(),
     executeContainerRunActivity: vi.fn(),
     executeParallelContainerRunActivity: vi.fn(),
+  },
+  terminalActivityMocks: {
+    executeAgentActivity: vi.fn(),
   },
   executeAgentRpcMock: vi.fn(),
 }));
@@ -42,7 +45,9 @@ vi.mock('../logger.js', () => ({
 }));
 
 vi.mock('@temporalio/workflow', () => ({
-  proxyActivities: () => activityMocks,
+  proxyActivities: vi.fn((options?: { retry?: { maximumAttempts?: number } }) =>
+    options?.retry?.maximumAttempts === 1 ? terminalActivityMocks : activityMocks
+  ),
   setHandler: vi.fn(),
   defineSignal: vi.fn(() => Symbol('humanInput')),
   condition: vi.fn(async (predicate: () => boolean) => predicate()),
@@ -66,6 +71,9 @@ function baseDefinition(states: TemporalWorkflowDefinition['states'], initial = 
 describe('aegis_workflow container orchestration behavior', () => {
   beforeEach(() => {
     for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    for (const fn of Object.values(terminalActivityMocks)) {
       fn.mockReset();
     }
     executeAgentRpcMock.mockReset();
@@ -334,6 +342,39 @@ describe('aegis_workflow container orchestration behavior', () => {
     expect(activityMocks.executeSystemCommandActivity).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'echo generate-workflow',
+      })
+    );
+  });
+
+  it('routes the final workflow-creator-validator-agent through the terminal activity proxy and fails cleanly on error', async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          GENERATE_AND_REGISTER_WORKFLOW: {
+            kind: 'Agent',
+            agent: 'workflow-creator-validator-agent',
+            input: 'validate and register',
+            transitions: [],
+          },
+        },
+        'GENERATE_AND_REGISTER_WORKFLOW'
+      )
+    );
+    terminalActivityMocks.executeAgentActivity.mockRejectedValue(new Error('Connection dropped'));
+
+    const result = await aegis_workflow({ workflow_id: 'wf-1', input: {} });
+
+    expect(terminalActivityMocks.executeAgentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'workflow-creator-validator-agent',
+      })
+    );
+    expect(activityMocks.executeAgentActivity).not.toHaveBeenCalled();
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('Connection dropped');
+    expect(activityMocks.publishEventActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'WorkflowExecutionFailed',
       })
     );
   });

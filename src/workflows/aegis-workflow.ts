@@ -10,6 +10,20 @@ import type {
 import * as activities from '../activities/index.js';
 
 // Proxy activities
+const agentActivities = proxyActivities<typeof activities>({
+    startToCloseTimeout: '10 minutes',
+    retry: {
+        maximumAttempts: 3,
+    },
+});
+
+const terminalAgentActivities = proxyActivities<typeof activities>({
+    startToCloseTimeout: '10 minutes',
+    retry: {
+        maximumAttempts: 1,
+    },
+});
+
 const {
     executeAgentActivity,
     executeSystemCommandActivity,
@@ -20,12 +34,9 @@ const {
     publishEventActivity,
     executeContainerRunActivity,
     executeParallelContainerRunActivity,
-} = proxyActivities<typeof activities>({
-    startToCloseTimeout: '10 minutes',
-    retry: {
-        maximumAttempts: 3,
-    },
-});
+} = agentActivities;
+
+const { executeAgentActivity: executeAgentTerminalActivity } = terminalAgentActivities;
 
 // Register Handlebars helpers (idempotent if registered multiple times in sandbox)
 Handlebars.registerHelper('length', (value: any) => {
@@ -236,7 +247,13 @@ async function executeState(
                 await emit('WorkflowIterationStarted', { iteration_number: iteration });
 
                 try {
-                    const result = await executeAgentActivity({
+                    const isTerminalValidationAgent =
+                        state.agent === 'workflow-creator-validator-agent' ||
+                        stateName === 'GENERATE_AND_REGISTER_WORKFLOW';
+
+                    const result = await (isTerminalValidationAgent
+                        ? executeAgentTerminalActivity
+                        : executeAgentActivity)({
                         agentId: state.agent,
                         input: currentInput,
                         context: blackboard,
