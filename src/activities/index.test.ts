@@ -82,6 +82,38 @@ describe('Temporal activities', () => {
     expect(request.parent_execution_id).toBeUndefined();
   });
 
+  it('returns completed result when the client synthesizes terminal completion from persisted state', async () => {
+    executeAgentMock.mockResolvedValue([
+      {
+        event_type: 'IterationCompleted',
+        execution_id: 'child-exec-2',
+        timestamp: '2026-03-22T08:32:12.572760Z',
+        iteration_number: 1,
+        output: '{"deployed":true}',
+      },
+      {
+        event_type: 'ExecutionCompleted',
+        execution_id: 'child-exec-2',
+        timestamp: '2026-03-22T08:32:22.572760Z',
+        final_output: '{"deployed":true}',
+        total_iterations: 1,
+      },
+    ]);
+
+    const result = await executeAgentActivity({
+      agentId: '123e4567-e89b-12d3-a456-426614174000',
+      input: 'register workflow',
+      context: {},
+      workflowExecutionId: 'wf-exec-2',
+    });
+
+    expect(result).toEqual({
+      status: 'completed',
+      output: { deployed: true },
+      iterations: 1,
+    });
+  });
+
   it('returns failure result (no throw) for all_succeed when any step fails', async () => {
     executeContainerRunMock
       .mockResolvedValueOnce(ok(0, 'unit'))

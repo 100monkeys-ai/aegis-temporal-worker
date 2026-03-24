@@ -39,6 +39,127 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
 
 const aegisProto = grpc.loadPackageDefinition(packageDefinition) as any;
 
+const TERMINAL_EVENT_TYPES = new Set<ExecutionEvent['event_type']>([
+  'ExecutionCompleted',
+  'ExecutionFailed',
+]);
+
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
+const EXECUTION_FALLBACK_IDLE_MS = Number.parseInt(
+  process.env.AEGIS_EXECUTION_FALLBACK_IDLE_MS ?? '5000',
+  10,
+);
+
+const EXECUTION_FALLBACK_POLL_MS = Number.parseInt(
+  process.env.AEGIS_EXECUTION_FALLBACK_POLL_MS ?? '1000',
+  10,
+);
+
+interface PersistedExecutionStatusResponse {
+  status?: string;
+  error?: string;
+}
+
+function executionStatusUrl(executionId: string): string {
+  const orchestratorUrl =
+    process.env.AEGIS_ORCHESTRATOR_URL || 'http://localhost:8088';
+  return `${orchestratorUrl}/v1/executions/${encodeURIComponent(executionId)}`;
+}
+
+async function fetchPersistedExecutionStatus(
+  executionId: string,
+): Promise<string | null> {
+  const resp = await fetch(executionStatusUrl(executionId));
+  if (!resp.ok) {
+    throw new Error(
+      `Failed to fetch execution ${executionId} status (HTTP ${resp.status})`,
+    );
+  }
+
+  const payload = (await resp.json()) as PersistedExecutionStatusResponse;
+  if (payload.error) {
+    throw new Error(payload.error);
+  }
+
+  return payload.status?.toLowerCase() ?? null;
+}
+
+function latestKnownOutput(events: ExecutionEvent[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event.final_output) {
+      return event.final_output;
+    }
+    if (event.output) {
+      return event.output;
+    }
+  }
+  return undefined;
+}
+
+function latestFailureReason(events: ExecutionEvent[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event.reason) {
+      return event.reason;
+    }
+    if (event.error_message) {
+      return event.error_message;
+    }
+  }
+  return undefined;
+}
+
+function highestIteration(events: ExecutionEvent[]): number {
+  return events.reduce(
+    (max, event) => Math.max(max, event.iteration_number ?? 0),
+    0,
+  );
+}
+
+function synthesizeTerminalEvent(
+  status: string,
+  executionId: string,
+  events: ExecutionEvent[],
+): ExecutionEvent | null {
+  const timestamp = new Date().toISOString();
+  const totalIterations = highestIteration(events);
+
+  switch (status) {
+    case 'completed':
+      return {
+        event_type: 'ExecutionCompleted',
+        execution_id: executionId,
+        timestamp,
+        final_output: latestKnownOutput(events),
+        total_iterations: totalIterations,
+      };
+    case 'failed':
+      return {
+        event_type: 'ExecutionFailed',
+        execution_id: executionId,
+        timestamp,
+        reason:
+          latestFailureReason(events) ??
+          'Execution reached persisted failed state',
+        total_iterations: totalIterations,
+      };
+    case 'cancelled':
+      return {
+        event_type: 'ExecutionFailed',
+        execution_id: executionId,
+        timestamp,
+        reason:
+          latestFailureReason(events) ??
+          'Execution reached persisted cancelled state',
+        total_iterations: totalIterations,
+      };
+    default:
+      return null;
+  }
+}
+
 // Create gRPC client
 class AegisRuntimeClient {
   private client: any;
@@ -59,13 +180,117 @@ class AegisRuntimeClient {
     return new Promise((resolve, reject) => {
       const events: ExecutionEvent[] = [];
       let settled = false;
+      let executionId: string | undefined;
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
+      let pollTimer: ReturnType<typeof setTimeout> | undefined;
+      let fallbackPollInFlight = false;
 
       const call = this.client.ExecuteAgent(request);
 
       const cleanup = () => {
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+          idleTimer = undefined;
+        }
+        if (pollTimer) {
+          clearTimeout(pollTimer);
+          pollTimer = undefined;
+        }
         call.removeAllListeners('data');
         call.removeAllListeners('end');
         call.removeAllListeners('error');
+      };
+
+      const settleWithEvents = (
+        resolvedEvents: ExecutionEvent[],
+        logMessage: string,
+        logLevel: 'info' | 'error' = 'info',
+      ) => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        cleanup();
+
+        const terminalEvent = resolvedEvents.at(-1);
+        logger[logLevel](
+          {
+            event_type: terminalEvent?.event_type,
+            event_count: resolvedEvents.length,
+            execution_id: terminalEvent?.execution_id ?? executionId,
+            reason: terminalEvent?.reason ?? undefined,
+          },
+          logMessage,
+        );
+        resolve(resolvedEvents);
+      };
+
+      const scheduleFallbackProbe = () => {
+        if (settled || !executionId || idleTimer) {
+          return;
+        }
+
+        idleTimer = setTimeout(() => {
+          idleTimer = undefined;
+          void probePersistedTerminalState('idle_timeout');
+        }, EXECUTION_FALLBACK_IDLE_MS);
+      };
+
+      const scheduleNextPoll = () => {
+        if (settled || !executionId || pollTimer) {
+          return;
+        }
+
+        pollTimer = setTimeout(() => {
+          pollTimer = undefined;
+          void probePersistedTerminalState('poll_retry');
+        }, EXECUTION_FALLBACK_POLL_MS);
+      };
+
+      const probePersistedTerminalState = async (trigger: string) => {
+        if (settled || !executionId || fallbackPollInFlight) {
+          return;
+        }
+
+        fallbackPollInFlight = true;
+
+        try {
+          const status = await fetchPersistedExecutionStatus(executionId);
+          if (status && TERMINAL_STATUSES.has(status)) {
+            const synthesizedEvent = synthesizeTerminalEvent(
+              status,
+              executionId,
+              events,
+            );
+
+            if (synthesizedEvent) {
+              events.push(synthesizedEvent);
+              settleWithEvents(
+                events,
+                'Agent execution resolved from persisted terminal state',
+                synthesizedEvent.event_type === 'ExecutionFailed'
+                  ? 'error'
+                  : 'info',
+              );
+              return;
+            }
+          }
+
+          logger.debug(
+            { execution_id: executionId, status, trigger },
+            'Persisted execution state not terminal yet',
+          );
+          scheduleNextPoll();
+        } catch (error) {
+          logger.warn(
+            { error, execution_id: executionId, trigger },
+            'Failed to fetch persisted execution status',
+          );
+          scheduleNextPoll();
+        } finally {
+          fallbackPollInFlight = false;
+        }
       };
 
       call.on('data', (rawEvent: any) => {
@@ -98,50 +323,55 @@ class AegisRuntimeClient {
 
         logger.debug({ event_type: event.event_type }, 'Received execution event');
         events.push(event);
-
-        if (
-          event.event_type === 'ExecutionCompleted' ||
-          event.event_type === 'ExecutionFailed'
-        ) {
-          settled = true;
-          cleanup();
-          if (event.event_type === 'ExecutionFailed') {
-            logger.error(
-              {
-                event_type: event.event_type,
-                event_count: events.length,
-                execution_id: event.execution_id,
-                reason: event.reason ?? undefined,
-              },
-              'Agent execution failed'
-            );
-          } else {
-            logger.info(
-              {
-                event_type: event.event_type,
-                event_count: events.length,
-                execution_id: event.execution_id,
-              },
-              'Agent execution reached terminal event'
-            );
-          }
-          resolve(events);
+        if (event.execution_id) {
+          executionId = event.execution_id;
         }
+
+        if (TERMINAL_EVENT_TYPES.has(event.event_type)) {
+          settleWithEvents(
+            events,
+            event.event_type === 'ExecutionFailed'
+              ? 'Agent execution failed'
+              : 'Agent execution reached terminal event',
+            event.event_type === 'ExecutionFailed' ? 'error' : 'info',
+          );
+          return;
+        }
+
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+          idleTimer = undefined;
+        }
+        scheduleFallbackProbe();
       });
 
       call.on('end', () => {
         if (settled) {
           return;
         }
-
-        settled = true;
-        cleanup();
-        logger.info({ event_count: events.length }, 'Agent execution completed');
-        resolve(events);
+        void probePersistedTerminalState('stream_end');
       });
 
       call.on('error', (error: Error) => {
         if (settled) {
+          return;
+        }
+
+        if (executionId) {
+          logger.warn(
+            { error, execution_id: executionId },
+            'Agent execution stream errored before terminal event; checking persisted status',
+          );
+          void probePersistedTerminalState('stream_error').finally(() => {
+            if (settled) {
+              return;
+            }
+
+            settled = true;
+            cleanup();
+            logger.error({ error }, 'Agent execution failed');
+            reject(error);
+          });
           return;
         }
 
