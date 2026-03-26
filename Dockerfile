@@ -6,7 +6,7 @@
 # Temporal's SDK uses @temporalio/worker which ships native binaries that require glibc;
 # Alpine (musl) is incompatible and will fail at runtime.
 
-FROM node:20-slim AS builder
+FROM node:25-slim AS builder
 
 WORKDIR /app
 
@@ -24,7 +24,7 @@ RUN npm run build
 
 # ─── Production image ────────────────────────────────────────────────────────
 
-FROM node:20-slim
+FROM node:25-slim
 
 WORKDIR /app
 
