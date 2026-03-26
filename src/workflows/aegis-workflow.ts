@@ -60,6 +60,9 @@ interface GenericWorkflowInput {
     workflow_id: string;
     input: Record<string, any>;
     blackboard?: Record<string, any>;
+    /** Tenant slug derived from the caller's JWT. Threaded through all
+     *  downstream gRPC calls for tenant-scoped isolation. */
+    tenant_id?: string;
 }
 
 /**
@@ -70,7 +73,7 @@ interface GenericWorkflowInput {
  * at runtime and executes it step-by-step.
  */
 export async function aegis_workflow(args: GenericWorkflowInput): Promise<WorkflowResult> {
-    const { workflow_id, input, blackboard: blackboardOverrides } = args;
+    const { workflow_id, input, blackboard: blackboardOverrides, tenant_id } = args;
     const info = workflowInfo();
     const executionId = info.workflowId; // In AEGIS, Temporal workflowId is the Execution UUID
     let temporalSequenceNumber = 1;
@@ -108,9 +111,12 @@ export async function aegis_workflow(args: GenericWorkflowInput): Promise<Workfl
     workflowId = definition.workflow_id;
 
     // 2. Initialize Blackboard
+    // Resolve tenant_id: explicit arg > definition > fallback empty
+    const resolvedTenantId = tenant_id || definition.tenant_id || '';
     const blackboard: Blackboard = {
         ...definition.context,
         ...(blackboardOverrides ?? {}),
+        tenant_id: resolvedTenantId,
         workflow: {
             name: definition.name,
             version: definition.version,

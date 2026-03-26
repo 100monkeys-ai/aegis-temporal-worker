@@ -257,6 +257,8 @@ export interface WorkflowInput {
   command?: string;
   max_iterations?: number;
   validation_threshold?: number;
+  /** Tenant slug derived from JWT; scopes all execution artifacts to the tenant. */
+  tenant_id?: string;
   [key: string]: any;
 }
 
@@ -351,6 +353,9 @@ export interface ExecuteAgentRequest {
    * child-execution spawn paths (for example, judge agents or nested workflow
    * children). Do not set this for normal workflow-managed agent states. */
   parent_execution_id?: string;
+  /** Tenant slug derived from JWT; scopes execution to the identified tenant.
+   * Maps to proto field tenant_id (field 7). */
+  tenant_id?: string;
 }
 
 /**
