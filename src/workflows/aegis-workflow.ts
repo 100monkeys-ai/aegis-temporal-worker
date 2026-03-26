@@ -1,4 +1,5 @@
-import { proxyActivities, setHandler, defineSignal, condition, workflowInfo } from '@temporalio/workflow';
+import * as workflow from '@temporalio/workflow';
+import { proxyActivities, setHandler, defineSignal, condition, workflowInfo, uuid4 } from '@temporalio/workflow';
 import Handlebars from 'handlebars';
 import type {
     WorkflowResult,
@@ -521,6 +522,71 @@ async function executeState(
                 output: byStep,
                 results: pcrResult.results,
             };
+        }
+
+        case 'Subworkflow': {
+            const childWorkflowId = state.subworkflow_id;
+            if (!childWorkflowId) {
+                throw new Error(`Invalid Subworkflow state '${stateName}': missing subworkflow_id`);
+            }
+            const childMode = state.subworkflow_mode ?? 'blocking';
+
+            // Evaluate input template if provided
+            let childInput: Record<string, any> = {};
+            if (state.subworkflow_input) {
+                const rendered = renderTemplate(state.subworkflow_input, blackboard);
+                try {
+                    childInput = JSON.parse(rendered);
+                } catch {
+                    childInput = { input: rendered };
+                }
+            }
+
+            const childExecutionId = uuid4();
+
+            await emit('SubworkflowTriggered', {
+                child_execution_id: childExecutionId,
+                child_workflow_id: childWorkflowId,
+                mode: childMode,
+                state_name: stateName,
+            });
+
+            if (childMode === 'blocking') {
+                // Use Temporal executeChild — blocks until child completes
+                const childResult = await workflow.executeChild('aegis_workflow', {
+                    args: [{
+                        workflow_id: childWorkflowId,
+                        execution_id: childExecutionId,
+                        input: childInput,
+                        blackboard: {},
+                    }],
+                    workflowId: `${childWorkflowId}-${childExecutionId}`,
+                });
+
+                // Write result to parent blackboard under result_key
+                const resultKey = state.subworkflow_result_key ?? `${stateName}_result`;
+                blackboard[resultKey] = childResult;
+
+                await emit('SubworkflowCompleted', {
+                    child_execution_id: childExecutionId,
+                    result_key: resultKey,
+                });
+
+                return childResult ?? {};
+            } else {
+                // Fire-and-forget — start child but don't wait
+                await workflow.startChild('aegis_workflow', {
+                    args: [{
+                        workflow_id: childWorkflowId,
+                        execution_id: childExecutionId,
+                        input: childInput,
+                        blackboard: {},
+                    }],
+                    workflowId: `${childWorkflowId}-${childExecutionId}`,
+                });
+
+                return { child_execution_id: childExecutionId, mode: 'fire_and_forget' };
+            }
         }
 
         default:

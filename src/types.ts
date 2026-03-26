@@ -174,6 +174,12 @@ export interface WorkflowState {
   parallel_container_steps?: ContainerRunConfig[];
   parallel_container_completion?: 'all_succeed' | 'any_succeed' | 'best_effort';
 
+  // Subworkflow-specific (ADR-065)
+  subworkflow_id?: string;
+  subworkflow_mode?: 'blocking' | 'fire_and_forget';
+  subworkflow_result_key?: string;
+  subworkflow_input?: string;
+
   // Transitions
   transitions: TransitionRule[];
 }
@@ -181,7 +187,7 @@ export interface WorkflowState {
 /**
  * State kind enum
  */
-export type StateKind = 'Agent' | 'System' | 'Human' | 'ParallelAgents' | 'ContainerRun' | 'ParallelContainerRun';
+export type StateKind = 'Agent' | 'System' | 'Human' | 'ParallelAgents' | 'ContainerRun' | 'ParallelContainerRun' | 'Subworkflow';
 
 /**
  * Parallel agent configuration
