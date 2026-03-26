@@ -49,6 +49,12 @@ Handlebars.registerHelper('length', (value: any) => {
 Handlebars.registerHelper('upper', (str: string) => (str || '').toUpperCase());
 Handlebars.registerHelper('lower', (str: string) => (str || '').toLowerCase());
 Handlebars.registerHelper('trim', (str: string) => (str || '').trim());
+// ADR-031: additional helpers for blackboard context hydration
+Handlebars.registerHelper('json', (value: any) => JSON.stringify(value));
+Handlebars.registerHelper('first_line', (str: string) => (str || '').split('\n')[0].trim());
+Handlebars.registerHelper('default', (value: any, fallback: any) =>
+    (value !== null && value !== undefined && value !== '') ? value : fallback
+);
 
 interface GenericWorkflowInput {
     workflow_id: string;
