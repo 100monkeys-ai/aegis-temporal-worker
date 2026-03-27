@@ -563,6 +563,7 @@ async function executeState(
                 child_workflow_id: childWorkflowId,
                 mode: childMode,
                 parent_state_name: stateName,
+                parent_execution_id: executionId,
             });
 
             if (childMode === 'blocking') {
@@ -584,6 +585,7 @@ async function executeState(
                     await emit('SubworkflowFailed', {
                         child_execution_id: childExecutionId,
                         error: errMsg,
+                        parent_execution_id: executionId,
                     });
                     throw error;
                 }
@@ -595,6 +597,7 @@ async function executeState(
                 await emit('SubworkflowCompleted', {
                     child_execution_id: childExecutionId,
                     result_key: resultKey,
+                    parent_execution_id: executionId,
                 });
 
                 return childResult ?? {};

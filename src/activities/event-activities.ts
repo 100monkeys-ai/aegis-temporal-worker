@@ -3,6 +3,7 @@ import { logger } from '../logger.js';
 export interface PublishEventParams {
   event_type: string;
   execution_id: string;
+  parent_execution_id?: string;
   temporal_sequence_number: number;
   workflow_id?: string;
   state_name?: string;
