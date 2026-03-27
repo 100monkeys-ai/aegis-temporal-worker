@@ -63,6 +63,8 @@ interface GenericWorkflowInput {
     /** Tenant slug derived from the caller's JWT. Threaded through all
      *  downstream gRPC calls for tenant-scoped isolation. */
     tenant_id?: string;
+    /** When this workflow is invoked as a child, the parent's execution ID. */
+    parent_execution_id?: string;
 }
 
 /**
@@ -560,20 +562,31 @@ async function executeState(
                 child_execution_id: childExecutionId,
                 child_workflow_id: childWorkflowId,
                 mode: childMode,
-                state_name: stateName,
+                parent_state_name: stateName,
             });
 
             if (childMode === 'blocking') {
                 // Use Temporal executeChild — blocks until child completes
-                const childResult = await workflow.executeChild('aegis_workflow', {
-                    args: [{
-                        workflow_id: childWorkflowId,
-                        execution_id: childExecutionId,
-                        input: childInput,
-                        blackboard: {},
-                    }],
-                    workflowId: `${childWorkflowId}-${childExecutionId}`,
-                });
+                let childResult;
+                try {
+                    childResult = await workflow.executeChild('aegis_workflow', {
+                        args: [{
+                            workflow_id: childWorkflowId,
+                            execution_id: childExecutionId,
+                            input: childInput,
+                            blackboard: {},
+                            parent_execution_id: executionId,
+                        }],
+                        workflowId: `${childWorkflowId}-${childExecutionId}`,
+                    });
+                } catch (error) {
+                    const errMsg = error instanceof Error ? error.message : String(error);
+                    await emit('SubworkflowFailed', {
+                        child_execution_id: childExecutionId,
+                        error: errMsg,
+                    });
+                    throw error;
+                }
 
                 // Write result to parent blackboard under result_key
                 const resultKey = state.subworkflow_result_key ?? `${stateName}_result`;
@@ -593,6 +606,7 @@ async function executeState(
                         execution_id: childExecutionId,
                         input: childInput,
                         blackboard: {},
+                        parent_execution_id: executionId,
                     }],
                     workflowId: `${childWorkflowId}-${childExecutionId}`,
                 });
