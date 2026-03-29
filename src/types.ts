@@ -108,6 +108,10 @@ export interface TemporalWorkflowDefinition {
   states: Record<string, WorkflowState>;
   /** Named volume declarations from spec.volumes (ADR-050) */
   spec_volumes?: WorkflowVolumeSpec[];
+  /** Visibility scope for this workflow definition (ADR-076) */
+  scope?: 'global' | 'tenant' | 'user';
+  /** Owner user ID when scope is 'user' (ADR-076) */
+  owner_user_id?: string;
 }
 
 /**

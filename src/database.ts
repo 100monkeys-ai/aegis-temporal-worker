@@ -53,17 +53,21 @@ export class Database {
         tenant_id,
         name,
         version,
+        scope,
+        owner_user_id,
         definition,
         registered_at,
         definition_hash
       )
-      VALUES ($1, $2, $3, $4, $5, NOW(), $6)
-      ON CONFLICT (tenant_id, name, version)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
+      ON CONFLICT (tenant_id, name, version, scope, COALESCE(owner_user_id, ''))
       DO UPDATE SET
         workflow_id = EXCLUDED.workflow_id,
         definition = EXCLUDED.definition,
         registered_at = NOW(),
-        definition_hash = EXCLUDED.definition_hash
+        definition_hash = EXCLUDED.definition_hash,
+        scope = EXCLUDED.scope,
+        owner_user_id = EXCLUDED.owner_user_id
     `;
 
     const definitionHash = this.hashDefinition(definition);
@@ -74,6 +78,8 @@ export class Database {
         definition.tenant_id,
         definition.name,
         definition.version,
+        definition.scope || 'tenant',
+        definition.owner_user_id || null,
         JSON.stringify(definition),
         definitionHash,
       ]);
