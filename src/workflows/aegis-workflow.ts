@@ -63,6 +63,9 @@ interface GenericWorkflowInput {
     /** Tenant slug derived from the caller's JWT. Threaded through all
      *  downstream gRPC calls for tenant-scoped isolation. */
     tenant_id?: string;
+    /** Security context name for policy enforcement. Threaded through all
+     *  downstream gRPC calls for security-context-scoped policy. */
+    security_context_name?: string;
     /** When this workflow is invoked as a child, the parent's execution ID. */
     parent_execution_id?: string;
 }
@@ -75,7 +78,7 @@ interface GenericWorkflowInput {
  * at runtime and executes it step-by-step.
  */
 export async function aegis_workflow(args: GenericWorkflowInput): Promise<WorkflowResult> {
-    const { workflow_id, input, blackboard: blackboardOverrides, tenant_id } = args;
+    const { workflow_id, input, blackboard: blackboardOverrides, tenant_id, security_context_name } = args;
     const info = workflowInfo();
     const executionId = info.workflowId; // In AEGIS, Temporal workflowId is the Execution UUID
     let temporalSequenceNumber = 1;
@@ -145,7 +148,7 @@ export async function aegis_workflow(args: GenericWorkflowInput): Promise<Workfl
             await emit('WorkflowStateEntered', { state_name: currentState });
 
             // Execute State
-            const stateOutput = await executeState(state, currentState, blackboard, emit, executionId, humanSignal);
+            const stateOutput = await executeState(state, currentState, blackboard, emit, executionId, humanSignal, security_context_name);
 
             await emit('WorkflowStateExited', { state_name: currentState, output: stateOutput });
 
@@ -212,7 +215,8 @@ async function executeState(
     blackboard: Blackboard,
     emit: (eventType: string, extra?: any) => Promise<void>,
     executionId: string,
-    humanSignal: { getResponse: () => string | null; clearResponse: () => void }
+    humanSignal: { getResponse: () => string | null; clearResponse: () => void },
+    securityContextName?: string,
 ): Promise<any> {
     switch (state.kind) {
         case 'Agent':
@@ -244,6 +248,7 @@ async function executeState(
                     task: `Pre-execution plan validation for workflow state: ${stateName}`,
                     judges: [{ agent_id: state.pre_execution_validator, weight: 1.0 }],
                     context_json: JSON.stringify({ execution_id: executionId, state_name: stateName }),
+                    securityContextName,
                 });
                 if (preValResult.binary_valid === false) {
                     await emit('WorkflowIterationFailed', {
@@ -273,6 +278,7 @@ async function executeState(
                         input: currentInput,
                         context: blackboard,
                         workflowExecutionId: executionId,
+                        securityContextName,
                     });
 
                     lastOutput = result;
@@ -300,6 +306,7 @@ async function executeState(
                         consensus_threshold: state.consensus?.threshold,
                         // Pass execution context so Rust can link judge child executions
                         context_json: JSON.stringify({ execution_id: executionId }),
+                        securityContextName,
                     });
 
                     const iterScore: number = validationResult.score ?? 0;
@@ -392,7 +399,8 @@ async function executeState(
                 consensus: {
                     strategy: state.consensus.strategy,
                     threshold: state.consensus.threshold ?? 0.7
-                }
+                },
+                securityContextName,
             });
 
         case 'ContainerRun': {
@@ -427,6 +435,7 @@ async function executeState(
                 registry_credentials: state.container_run_registry_credentials,
                 shell: state.container_run_shell ?? false,
                 max_attempts: state.container_run_retry?.max_attempts ?? 1,
+                security_context_name: securityContextName,
             });
 
             if (crResult.exit_code === 0) {
@@ -488,6 +497,7 @@ async function executeState(
                 state_name: stateName,
                 steps: renderedSteps,
                 completion: state.parallel_container_completion ?? 'all_succeed',
+                securityContextName,
             });
 
             const byStep = Object.fromEntries(
@@ -577,6 +587,7 @@ async function executeState(
                             input: childInput,
                             blackboard: {},
                             parent_execution_id: executionId,
+                            security_context_name: securityContextName,
                         }],
                         workflowId: `${childWorkflowId}-${childExecutionId}`,
                     });
@@ -610,6 +621,7 @@ async function executeState(
                         input: childInput,
                         blackboard: {},
                         parent_execution_id: executionId,
+                        security_context_name: securityContextName,
                     }],
                     workflowId: `${childWorkflowId}-${childExecutionId}`,
                 });

@@ -79,6 +79,7 @@ export async function executeAgentActivity(params: {
   context: Blackboard;
   workflowExecutionId?: string;
   parentExecutionId?: string;
+  securityContextName?: string;
 }): Promise<any> {
   logger.info({ agent_id: params.agentId }, 'Executing agent activity');
 
@@ -97,6 +98,10 @@ export async function executeAgentActivity(params: {
 
   if (params.parentExecutionId) {
     request.parent_execution_id = params.parentExecutionId;
+  }
+
+  if (params.securityContextName) {
+    request.security_context_name = params.securityContextName;
   }
 
   try {
@@ -173,6 +178,7 @@ export async function validateOutputActivity(params: {
   consensus_strategy?: string;
   consensus_threshold?: number;
   context_json?: string;
+  securityContextName?: string;
 }): Promise<any> {
   logger.info({ judge_count: params.judges.length }, 'Validating output with judges');
 
@@ -184,6 +190,7 @@ export async function validateOutputActivity(params: {
       ? { strategy: params.consensus_strategy, threshold: params.consensus_threshold ?? 0.8 }
       : undefined,
     context_json: params.context_json,
+    security_context_name: params.securityContextName,
   };
 
   try {
@@ -213,6 +220,7 @@ export async function executeParallelAgentsActivity(params: {
     strategy: string;
     threshold: number;
   };
+  securityContextName?: string;
 }): Promise<any> {
   logger.info({ agent_count: params.agents.length }, 'Executing parallel agents');
 
@@ -226,6 +234,7 @@ export async function executeParallelAgentsActivity(params: {
           input: agentConfig.input,
           context_json: JSON.stringify({ input: agentConfig.input }),
           timeout_seconds: 300,
+          security_context_name: params.securityContextName,
         });
 
         // Extract output
@@ -270,6 +279,7 @@ export async function executeParallelAgentsActivity(params: {
         strategy: params.consensus.strategy,
         threshold: params.consensus.threshold,
       },
+      security_context_name: params.securityContextName,
     });
 
     return {
@@ -366,6 +376,7 @@ export async function executeParallelContainerRunActivity(params: {
   steps: ContainerRunConfig[];
   completion: 'all_succeed' | 'any_succeed' | 'best_effort';
   image_pull_policy?: string;
+  securityContextName?: string;
 }): Promise<{
   results: Array<{ name: string; exit_code: number; stdout: string; stderr: string; duration_ms: number }>;
   overall_success: boolean;
@@ -394,6 +405,7 @@ export async function executeParallelContainerRunActivity(params: {
         registry_credentials: step.registry_credentials,
         shell: step.shell ?? false,
         max_attempts: 1,
+        security_context_name: params.securityContextName,
       };
       const response = await aegisRuntimeClient.executeContainerRun(request);
       return { name: step.name, ...response };

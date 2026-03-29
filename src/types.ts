@@ -81,6 +81,8 @@ export interface ExecuteContainerRunRequest {
   shell?: boolean;
   state_name: string;
   max_attempts?: number;
+  /** Security context name for policy enforcement. */
+  security_context_name?: string;
 }
 
 /**
@@ -263,6 +265,8 @@ export interface WorkflowInput {
   validation_threshold?: number;
   /** Tenant slug derived from JWT; scopes all execution artifacts to the tenant. */
   tenant_id?: string;
+  /** Security context name for policy enforcement (e.g. "default", "restricted"). */
+  security_context_name?: string;
   [key: string]: any;
 }
 
@@ -360,6 +364,9 @@ export interface ExecuteAgentRequest {
   /** Tenant slug derived from JWT; scopes execution to the identified tenant.
    * Maps to proto field tenant_id (field 7). */
   tenant_id?: string;
+  /** Security context name for policy enforcement.
+   * Maps to proto field security_context_name (field 8). */
+  security_context_name?: string;
 }
 
 /**
@@ -421,6 +428,8 @@ export interface ValidateRequest {
   };
   /** Serialized JSON context string */
   context_json?: string;
+  /** Security context name for policy enforcement. */
+  security_context_name?: string;
 }
 
 /**
