@@ -98,6 +98,17 @@ export interface ExecuteContainerRunResponse {
 }
 
 /**
+ * Workspace volume specification for a workflow (ADR-087)
+ * Declares how the workflow provisions shared storage for its steps.
+ */
+export interface WorkflowWorkspaceSpec {
+  kind: 'ephemeral' | 'persistent'
+  ttl_hours?: number
+  volume_id?: string
+  blackboard_key?: string
+}
+
+/**
  * Temporal Workflow Definition generated from AEGIS YAML
  */
 export interface TemporalWorkflowDefinition {
@@ -110,6 +121,8 @@ export interface TemporalWorkflowDefinition {
   states: Record<string, WorkflowState>;
   /** Named volume declarations from spec.volumes (ADR-050) */
   spec_volumes?: WorkflowVolumeSpec[];
+  /** Workspace volume specification (ADR-087) */
+  spec_workspace?: WorkflowWorkspaceSpec;
   /** Visibility scope for this workflow definition (ADR-076) */
   scope?: 'global' | 'tenant' | 'user';
   /** Owner user ID when scope is 'user' (ADR-076) */

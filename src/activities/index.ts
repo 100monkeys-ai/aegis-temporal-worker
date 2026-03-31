@@ -334,6 +334,43 @@ export async function storeTrajectoryPatternActivity(params: {
 import { publishEventActivity } from './event-activities.js';
 
 /**
+ * Create an ephemeral workspace volume for a workflow execution (ADR-087)
+ */
+export async function createEphemeralWorkspaceActivity(params: {
+  execution_id: string
+  ttl_hours: number
+  tenant_id: string
+  size_limit_mb: number
+}): Promise<{ volume_id: string }> {
+  logger.info({ execution_id: params.execution_id }, 'Creating ephemeral workspace volume')
+  const response = await aegisRuntimeClient.createWorkspaceVolume({
+    execution_id: params.execution_id,
+    tenant_id: params.tenant_id,
+    ttl_hours: params.ttl_hours,
+    size_limit_mb: params.size_limit_mb,
+  })
+  logger.info({ volume_id: response.volume_id }, 'Ephemeral workspace volume created')
+  return { volume_id: response.volume_id }
+}
+
+/**
+ * Destroy a workspace volume after workflow completion (ADR-087)
+ */
+export async function destroyWorkspaceVolumeActivity(params: {
+  volume_id: string
+  execution_id: string
+  tenant_id: string
+}): Promise<void> {
+  logger.info({ volume_id: params.volume_id }, 'Destroying workspace volume')
+  await aegisRuntimeClient.destroyWorkspaceVolume({
+    volume_id: params.volume_id,
+    tenant_id: params.tenant_id,
+    execution_id: params.execution_id,
+  })
+  logger.info({ volume_id: params.volume_id }, 'Workspace volume destroyed')
+}
+
+/**
  * Execute a single deterministic container step without an LLM loop (ADR-050)
  *
  * Maps to the gRPC ExecuteContainerRun RPC on the Rust AegisRuntime service.
@@ -478,6 +515,8 @@ export const activities = {
   publishEventActivity,
   executeContainerRunActivity,
   executeParallelContainerRunActivity,
+  createEphemeralWorkspaceActivity,
+  destroyWorkspaceVolumeActivity,
 };
 
 export { fetchWorkflowDefinition, publishEventActivity };

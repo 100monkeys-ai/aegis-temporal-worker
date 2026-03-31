@@ -39,6 +39,16 @@ const {
 
 const { executeAgentActivity: executeAgentTerminalActivity } = terminalAgentActivities;
 
+const workspaceActivities = proxyActivities<{
+    createEphemeralWorkspaceActivity: typeof import('../activities/index.js').createEphemeralWorkspaceActivity
+    destroyWorkspaceVolumeActivity: typeof import('../activities/index.js').destroyWorkspaceVolumeActivity
+}>({
+    startToCloseTimeout: '2 minutes',
+    retry: {
+        maximumAttempts: 3,
+    },
+});
+
 // Register Handlebars helpers (idempotent if registered multiple times in sandbox)
 Handlebars.registerHelper('length', (value: any) => {
     if (Array.isArray(value)) return value.length;
@@ -78,7 +88,8 @@ interface GenericWorkflowInput {
  * at runtime and executes it step-by-step.
  */
 export async function aegis_workflow(args: GenericWorkflowInput): Promise<WorkflowResult> {
-    const { workflow_id, input, blackboard: blackboardOverrides, tenant_id, security_context_name } = args;
+    const { workflow_id, input, blackboard: blackboardOverridesArg, tenant_id, security_context_name } = args;
+    let blackboardOverrides = blackboardOverridesArg;
     const info = workflowInfo();
     const executionId = info.workflowId; // In AEGIS, Temporal workflowId is the Execution UUID
     let temporalSequenceNumber = 1;
@@ -115,9 +126,27 @@ export async function aegis_workflow(args: GenericWorkflowInput): Promise<Workfl
     const definition = await fetchWorkflowDefinition(workflow_id);
     workflowId = definition.workflow_id;
 
-    // 2. Initialize Blackboard
-    // Resolve tenant_id: explicit arg > definition > fallback empty
+    // ADR-087: Resolve tenant_id early — needed for workspace provisioning
     const resolvedTenantId = tenant_id || definition.tenant_id || '';
+
+    // ADR-087: provision ephemeral workspace volume if spec.workspace is declared
+    let workspaceVolumeId: string | undefined
+    if (definition.spec_workspace?.kind === 'ephemeral') {
+        const bbKey = definition.spec_workspace.blackboard_key ?? 'workspace_volume_id'
+        const result = await workspaceActivities.createEphemeralWorkspaceActivity({
+            execution_id: executionId,
+            ttl_hours: definition.spec_workspace.ttl_hours ?? 1,
+            tenant_id: resolvedTenantId,
+            size_limit_mb: 256,
+        })
+        workspaceVolumeId = result.volume_id
+        blackboardOverrides = { ...(blackboardOverrides ?? {}), [bbKey]: workspaceVolumeId }
+    } else if (definition.spec_workspace?.kind === 'persistent' && definition.spec_workspace.volume_id) {
+        const bbKey = definition.spec_workspace.blackboard_key ?? 'workspace_volume_id'
+        blackboardOverrides = { ...(blackboardOverrides ?? {}), [bbKey]: definition.spec_workspace.volume_id }
+    }
+
+    // 2. Initialize Blackboard
     const blackboard: Blackboard = {
         ...definition.context,
         ...(blackboardOverrides ?? {}),
@@ -157,6 +186,18 @@ export async function aegis_workflow(args: GenericWorkflowInput): Promise<Workfl
 
             // Check Terminal
             if (!state.transitions || state.transitions.length === 0) {
+                // ADR-087: destroy ephemeral workspace volume on terminal state
+                if (workspaceVolumeId) {
+                    try {
+                        await workspaceActivities.destroyWorkspaceVolumeActivity({
+                            volume_id: workspaceVolumeId,
+                            execution_id: executionId,
+                            tenant_id: resolvedTenantId,
+                        })
+                    } catch (err) {
+                        workflow.log.warn('Failed to destroy workspace volume; TTL will clean up')
+                    }
+                }
                 await emit('WorkflowExecutionCompleted', { final_blackboard: blackboard });
                 return {
                     status: 'completed',
@@ -171,6 +212,18 @@ export async function aegis_workflow(args: GenericWorkflowInput): Promise<Workfl
             currentState = await evaluateTransitions(state.transitions, stateOutput, blackboard);
 
             if (currentState === null) {
+                // ADR-087: destroy ephemeral workspace volume on terminal state
+                if (workspaceVolumeId) {
+                    try {
+                        await workspaceActivities.destroyWorkspaceVolumeActivity({
+                            volume_id: workspaceVolumeId,
+                            execution_id: executionId,
+                            tenant_id: resolvedTenantId,
+                        })
+                    } catch (err) {
+                        workflow.log.warn('Failed to destroy workspace volume; TTL will clean up')
+                    }
+                }
                 await emit('WorkflowExecutionCompleted', { final_blackboard: blackboard });
                 return {
                     status: 'completed',
@@ -183,6 +236,18 @@ export async function aegis_workflow(args: GenericWorkflowInput): Promise<Workfl
 
         } catch (error) {
             const errMsg = error instanceof Error ? error.message : String(error);
+            // ADR-087: destroy ephemeral workspace volume on failure
+            if (workspaceVolumeId) {
+                try {
+                    await workspaceActivities.destroyWorkspaceVolumeActivity({
+                        volume_id: workspaceVolumeId,
+                        execution_id: executionId,
+                        tenant_id: resolvedTenantId,
+                    })
+                } catch (cleanupErr) {
+                    workflow.log.warn('Failed to destroy workspace volume; TTL will clean up')
+                }
+            }
             await emit('WorkflowExecutionFailed', { error: errMsg, final_blackboard: blackboard });
             return {
                 status: 'failed',
@@ -195,6 +260,18 @@ export async function aegis_workflow(args: GenericWorkflowInput): Promise<Workfl
     }
 
     const err = 'Max iterations exceeded';
+    // ADR-087: destroy ephemeral workspace volume on max iterations exceeded
+    if (workspaceVolumeId) {
+        try {
+            await workspaceActivities.destroyWorkspaceVolumeActivity({
+                volume_id: workspaceVolumeId,
+                execution_id: executionId,
+                tenant_id: resolvedTenantId,
+            })
+        } catch (cleanupErr) {
+            workflow.log.warn('Failed to destroy workspace volume; TTL will clean up')
+        }
+    }
     await emit('WorkflowExecutionFailed', { error: err, final_blackboard: blackboard });
     return {
         status: 'failed',
@@ -412,6 +489,16 @@ async function executeState(
             if (state.container_run_env) {
                 for (const [k, v] of Object.entries(state.container_run_env)) {
                     crEnv[k] = renderTemplate(String(v), blackboard);
+                }
+            }
+
+            // ADR-087 Layer 2: inject workflow inputs as INTENT_INPUTS for parametric scripts
+            if (blackboard.workflow) {
+                const workflowInputs = { ...blackboard.workflow }
+                delete workflowInputs.name
+                delete workflowInputs.version
+                if (Object.keys(workflowInputs).length > 0) {
+                    crEnv['INTENT_INPUTS'] = JSON.stringify(workflowInputs)
                 }
             }
 

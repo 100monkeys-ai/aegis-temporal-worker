@@ -489,6 +489,49 @@ class AegisRuntimeClient {
   }
 
   /**
+   * Create an ephemeral workspace volume on the runtime (ADR-087)
+   */
+  async createWorkspaceVolume(request: {
+    execution_id: string
+    tenant_id: string
+    ttl_hours: number
+    size_limit_mb: number
+  }): Promise<{ volume_id: string; remote_path: string }> {
+    return new Promise((resolve, reject) => {
+      this.client.CreateWorkspaceVolume(request, (error: Error | null, response: any) => {
+        if (error) {
+          logger.error({ error, execution_id: request.execution_id }, 'Workspace volume creation failed')
+          reject(error)
+        } else {
+          logger.info({ volume_id: response.volume_id }, 'Workspace volume created')
+          resolve({ volume_id: response.volume_id, remote_path: response.remote_path })
+        }
+      })
+    })
+  }
+
+  /**
+   * Destroy a workspace volume on the runtime (ADR-087)
+   */
+  async destroyWorkspaceVolume(request: {
+    volume_id: string
+    tenant_id: string
+    execution_id: string
+  }): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.client.DestroyWorkspaceVolume(request, (error: Error | null, response: any) => {
+        if (error) {
+          logger.error({ error, volume_id: request.volume_id }, 'Workspace volume destruction failed')
+          reject(error)
+        } else {
+          logger.info({ volume_id: request.volume_id }, 'Workspace volume destroyed')
+          resolve()
+        }
+      })
+    })
+  }
+
+  /**
    * Close the gRPC connection
    */
   close(): void {
