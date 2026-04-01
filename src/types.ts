@@ -102,10 +102,19 @@ export interface ExecuteContainerRunResponse {
  * Declares how the workflow provisions shared storage for its steps.
  */
 export interface WorkflowWorkspaceSpec {
-  kind: 'ephemeral' | 'persistent'
+  storage_class: 'ephemeral' | 'persistent'
   ttl_hours?: number
+  size_limit_mb?: number
   volume_id?: string
   blackboard_key?: string
+}
+
+/**
+ * Workflow-level storage configuration (WORKFLOW_MANIFEST_SPEC_V1 §spec.storage).
+ */
+export interface WorkflowStorageSpec {
+  workspace?: WorkflowWorkspaceSpec
+  shared_volumes?: WorkflowVolumeSpec[]
 }
 
 /**
@@ -121,8 +130,8 @@ export interface TemporalWorkflowDefinition {
   states: Record<string, WorkflowState>;
   /** Named volume declarations from spec.volumes (ADR-050) */
   spec_volumes?: WorkflowVolumeSpec[];
-  /** Workspace volume specification (ADR-087) */
-  spec_workspace?: WorkflowWorkspaceSpec;
+  /** Workflow-level storage configuration (WORKFLOW_MANIFEST_SPEC_V1 §spec.storage) */
+  spec_storage?: WorkflowStorageSpec;
   /** Visibility scope for this workflow definition (ADR-076) */
   scope?: 'global' | 'tenant' | 'user';
   /** Owner user ID when scope is 'user' (ADR-076) */

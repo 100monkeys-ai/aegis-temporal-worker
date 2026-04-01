@@ -129,21 +129,23 @@ export async function aegis_workflow(args: GenericWorkflowInput): Promise<Workfl
     // ADR-087: Resolve tenant_id early — needed for workspace provisioning
     const resolvedTenantId = tenant_id || definition.tenant_id || '';
 
-    // ADR-087: provision ephemeral workspace volume if spec.workspace is declared
+    // ADR-087: provision ephemeral workspace volume if spec.storage.workspace is declared
     let workspaceVolumeId: string | undefined
-    if (definition.spec_workspace?.kind === 'ephemeral') {
-        const bbKey = definition.spec_workspace.blackboard_key ?? 'workspace_volume_id'
+    if (definition.spec_storage?.workspace?.storage_class === 'ephemeral') {
+        const ws = definition.spec_storage.workspace
+        const bbKey = ws.blackboard_key ?? 'workspace_volume_id'
         const result = await workspaceActivities.createEphemeralWorkspaceActivity({
             execution_id: executionId,
-            ttl_hours: definition.spec_workspace.ttl_hours ?? 1,
+            ttl_hours: ws.ttl_hours ?? 1,
             tenant_id: resolvedTenantId,
-            size_limit_mb: 256,
+            size_limit_mb: ws.size_limit_mb ?? 256,
         })
         workspaceVolumeId = result.volume_id
         blackboardOverrides = { ...(blackboardOverrides ?? {}), [bbKey]: workspaceVolumeId }
-    } else if (definition.spec_workspace?.kind === 'persistent' && definition.spec_workspace.volume_id) {
-        const bbKey = definition.spec_workspace.blackboard_key ?? 'workspace_volume_id'
-        blackboardOverrides = { ...(blackboardOverrides ?? {}), [bbKey]: definition.spec_workspace.volume_id }
+    } else if (definition.spec_storage?.workspace?.storage_class === 'persistent' && definition.spec_storage.workspace.volume_id) {
+        const ws = definition.spec_storage.workspace
+        const bbKey = ws.blackboard_key ?? 'workspace_volume_id'
+        blackboardOverrides = { ...(blackboardOverrides ?? {}), [bbKey]: ws.volume_id }
     }
 
     // 2. Initialize Blackboard
