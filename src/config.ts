@@ -76,4 +76,10 @@ function loadConfig(): Config {
   });
 }
 
-export const config = loadConfig();
+let _config: Config | undefined;
+export const config: Config = new Proxy({} as Config, {
+  get(_target, prop) {
+    if (!_config) _config = loadConfig();
+    return (_config as any)[prop];
+  },
+});
