@@ -303,6 +303,7 @@ async function executeState(
 
             let iteration = 1;
             let currentInput = renderTemplate(state.input, blackboard);
+            const resolvedAgent = renderTemplate(state.agent, blackboard);
             // Iteration bound: state config > workflow-level context > default of 10
             const maxIterations: number = state.max_iterations ?? 10;
 
@@ -347,13 +348,13 @@ async function executeState(
 
                 try {
                     const isTerminalValidationAgent =
-                        state.agent === 'workflow-creator-validator-agent' ||
+                        resolvedAgent === 'workflow-creator-validator-agent' ||
                         stateName === 'GENERATE_AND_REGISTER_WORKFLOW';
 
                     const result = await (isTerminalValidationAgent
                         ? executeAgentTerminalActivity
                         : executeAgentActivity)({
-                        agentId: state.agent,
+                        agentId: resolvedAgent,
                         input: currentInput,
                         context: blackboard,
                         workflowExecutionId: executionId,
@@ -390,7 +391,7 @@ async function executeState(
 
                     const iterScore: number = validationResult.score ?? 0;
                     trajectorySteps.push({
-                        tool_name: state.agent,
+                        tool_name: resolvedAgent,
                         arguments_json: JSON.stringify({ output: result.output, score: iterScore }),
                     });
 
@@ -412,7 +413,7 @@ async function executeState(
                     await emit('RefinementApplied', {
                         iteration_number: iteration,
                         code_diff: validationResult.reasoning,
-                        agent_id: state.agent,
+                        agent_id: resolvedAgent,
                     });
 
                     currentInput = currentInput + `\n\nValidation failed with score ${iterScore}.\nReasoning: ${validationResult.reasoning}\nPlease refine your response.`;

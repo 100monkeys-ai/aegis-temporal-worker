@@ -418,6 +418,62 @@ describe('aegis_workflow container orchestration behavior', () => {
     );
   });
 
+  it('renders state.agent Handlebars template before passing agentId to activity', async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          GENERATE_CODE: {
+            kind: 'Agent',
+            agent: '{{DISCOVER_OR_GENERATE_AGENT.output.agent_name}}',
+            input: 'write code',
+            transitions: [],
+          },
+        },
+        'GENERATE_CODE'
+      )
+    );
+    // Pre-populate the blackboard via definition context so the template resolves
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue({
+      workflow_id: 'wf-1',
+      tenant_id: 'local',
+      name: 'ci-workflow',
+      version: '1.0.0',
+      initial_state: 'GENERATE_CODE',
+      context: {
+        DISCOVER_OR_GENERATE_AGENT: {
+          output: { agent_name: 'actual-agent-id' },
+        },
+      },
+      states: {
+        GENERATE_CODE: {
+          kind: 'Agent',
+          agent: '{{DISCOVER_OR_GENERATE_AGENT.output.agent_name}}',
+          input: 'write code',
+          transitions: [],
+        },
+      },
+    });
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: 'completed',
+      output: 'generated',
+      iterations: 1,
+    });
+
+    await aegis_workflow({ workflow_id: 'wf-1', input: {} });
+
+    expect(activityMocks.executeAgentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'actual-agent-id',
+      })
+    );
+    // Confirm the raw template string was NOT passed through
+    expect(activityMocks.executeAgentActivity).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: '{{DISCOVER_OR_GENERATE_AGENT.output.agent_name}}',
+      })
+    );
+  });
+
   it('routes on_failure for ParallelContainerRun when aggregation fails', async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue(
       baseDefinition(

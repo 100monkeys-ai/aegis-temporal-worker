@@ -128,8 +128,6 @@ export interface TemporalWorkflowDefinition {
   initial_state: string;
   context: Record<string, any>;
   states: Record<string, WorkflowState>;
-  /** Named volume declarations from spec.volumes (ADR-050) */
-  spec_volumes?: WorkflowVolumeSpec[];
   /** Workflow-level storage configuration (WORKFLOW_MANIFEST_SPEC_V1 §spec.storage) */
   spec_storage?: WorkflowStorageSpec;
   /** Visibility scope for this workflow definition (ADR-076) */
