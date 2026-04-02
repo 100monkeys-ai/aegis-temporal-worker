@@ -441,7 +441,7 @@ async function executeState(
             return await executeSystemCommandActivity({
                 command: renderTemplate(state.command, blackboard),
                 env,
-                workdir: state.workdir,
+                workdir: state.workdir ? renderTemplate(state.workdir, blackboard) : undefined,
                 timeout: state.timeout ? parseTimeout(state.timeout) : undefined,
             });
 
