@@ -5,6 +5,7 @@
 
 import { logger } from '../logger.js';
 import { aegisRuntimeClient } from '../grpc/client.js';
+import { getServiceToken } from '../auth/token-manager.js';
 import type {
   ExecuteAgentRequest,
   ExecuteSystemCommandRequest,
@@ -35,8 +36,10 @@ async function resolveAgentId(nameOrId: string): Promise<string> {
   logger.warn({ agent_name: nameOrId }, 'agent_id is not a UUID — resolving via REST');
   const orchestratorUrl =
     process.env.AEGIS_ORCHESTRATOR_URL || 'http://localhost:8088';
+  const token = await getServiceToken();
   const resp = await fetch(
     `${orchestratorUrl}/v1/agents/lookup/${encodeURIComponent(nameOrId)}`,
+    { headers: { Authorization: `Bearer ${token}` } },
   );
   if (!resp.ok) {
     throw new Error(

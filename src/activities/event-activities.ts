@@ -1,4 +1,5 @@
 import { logger } from '../logger.js';
+import { getServiceToken } from '../auth/token-manager.js';
 
 export interface PublishEventParams {
   event_type: string;
@@ -35,10 +36,12 @@ export async function publishEventActivity(params: PublishEventParams): Promise<
   };
 
   try {
+    const token = await getServiceToken();
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(payload),
     });
