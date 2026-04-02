@@ -474,6 +474,48 @@ describe('aegis_workflow container orchestration behavior', () => {
     );
   });
 
+  it('renders ContainerRun image and command templates from blackboard', async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          EXECUTE_CODE: {
+            kind: 'ContainerRun',
+            container_run_image: '{{workflow.container_image}}',
+            container_run_command: ['{{workflow.runner}}', '/workspace/solution.{{workflow.language_ext}}'],
+            transitions: [],
+          },
+        },
+        'EXECUTE_CODE'
+      )
+    );
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: '42',
+      stderr: '',
+      duration_ms: 100,
+      attempts: 1,
+    });
+
+    const result = await aegis_workflow({
+      workflow_id: 'wf-1',
+      input: { container_image: 'python:3.11-slim', runner: 'python', language_ext: 'py' },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(activityMocks.executeContainerRunActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        image: 'python:3.11-slim',
+        command: ['python', '/workspace/solution.py'],
+      })
+    );
+    // Confirm the raw template strings were NOT passed through
+    expect(activityMocks.executeContainerRunActivity).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        image: '{{workflow.container_image}}',
+      })
+    );
+  });
+
   it('routes on_failure for ParallelContainerRun when aggregation fails', async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue(
       baseDefinition(

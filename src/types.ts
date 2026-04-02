@@ -10,7 +10,7 @@ export type WorkflowStorageClass = 'ephemeral' | 'persistent';
 
 /**
  * Named volume declared in spec.volumes (ADR-050)
- * Forwarded from Rust TemporalWorkflowDefinition.spec_volumes.
+ * Forwarded from Rust TemporalWorkflowDefinition.spec_storage.shared_volumes.
  */
 export interface WorkflowVolumeSpec {
   name: string;

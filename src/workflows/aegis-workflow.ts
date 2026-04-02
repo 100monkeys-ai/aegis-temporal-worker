@@ -469,7 +469,7 @@ async function executeState(
         case 'ParallelAgents':
             if (!state.agents || !state.consensus) throw new Error("Invalid ParallelAgents State");
             const agentConfigs = state.agents.map(a => ({
-                agent: a.agent,
+                agent: renderTemplate(a.agent, blackboard),
                 input: renderTemplate(a.input, blackboard),
                 weight: a.weight
             }));
@@ -487,6 +487,17 @@ async function executeState(
             if (!state.container_run_image || !state.container_run_command) {
                 throw new Error(`Invalid ContainerRun state '${stateName}': missing image or command`);
             }
+
+            const renderedImage = renderTemplate(state.container_run_image, blackboard);
+            const renderedCommand = state.container_run_command.map(
+                (arg: string) => renderTemplate(arg, blackboard)
+            );
+            const renderedName = state.container_run_name
+                ? renderTemplate(state.container_run_name, blackboard)
+                : stateName;
+            const renderedWorkdir = state.container_run_workdir
+                ? renderTemplate(state.container_run_workdir, blackboard)
+                : undefined;
 
             const crEnv: Record<string, string> = {};
             if (state.container_run_env) {
@@ -507,19 +518,19 @@ async function executeState(
 
             await emit('ContainerRunStarted', {
                 state_name: stateName,
-                name: state.container_run_name,
-                image: state.container_run_image,
+                name: renderedName,
+                image: renderedImage,
             });
 
             const crResult = await executeContainerRunActivity({
                 execution_id: executionId,
                 state_name: stateName,
-                name: state.container_run_name ?? stateName,
-                image: state.container_run_image,
+                name: renderedName,
+                image: renderedImage,
                 image_pull_policy: state.container_run_image_pull_policy,
-                command: state.container_run_command,
+                command: renderedCommand,
                 env: crEnv,
-                workdir: state.container_run_workdir,
+                workdir: renderedWorkdir,
                 volumes: state.container_run_volumes ?? [],
                 resources: state.container_run_resources,
                 registry_credentials: state.container_run_registry_credentials,
@@ -639,10 +650,10 @@ async function executeState(
         }
 
         case 'Subworkflow': {
-            const childWorkflowId = state.subworkflow_id;
-            if (!childWorkflowId) {
+            if (!state.subworkflow_id) {
                 throw new Error(`Invalid Subworkflow state '${stateName}': missing subworkflow_id`);
             }
+            const childWorkflowId = renderTemplate(state.subworkflow_id, blackboard);
             const childMode = state.subworkflow_mode ?? 'blocking';
 
             // Evaluate input template if provided
