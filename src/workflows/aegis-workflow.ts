@@ -579,12 +579,19 @@ async function executeState(
             }
 
             const renderedSteps = state.parallel_container_steps.map((step) => ({
-                ...step,
+                name: step.name ? renderTemplate(step.name, blackboard) : step.name,
+                image: renderTemplate(step.image, blackboard),
+                command: step.command.map((arg: string) => renderTemplate(arg, blackboard)),
+                workdir: step.workdir ? renderTemplate(step.workdir, blackboard) : undefined,
                 env: step.env
                     ? Object.fromEntries(
                           Object.entries(step.env).map(([k, v]) => [k, renderTemplate(String(v), blackboard)])
                       )
                     : undefined,
+                volumes: step.volumes,
+                resources: step.resources,
+                registry_credentials: step.registry_credentials,
+                shell: step.shell,
             }));
 
             await emit('ContainerRunStarted', {

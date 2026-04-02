@@ -516,6 +516,64 @@ describe('aegis_workflow container orchestration behavior', () => {
     );
   });
 
+  it('renders ParallelContainerRun image and command templates for each step', async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          EXECUTE_PARALLEL: {
+            kind: 'ParallelContainerRun',
+            parallel_container_steps: [
+              {
+                name: 'test-step',
+                image: '{{workflow.container_image}}',
+                command: ['{{workflow.runner}}', '/workspace/solution.{{workflow.language_ext}}'],
+              },
+            ],
+            parallel_container_completion: 'all_succeed',
+            transitions: [],
+          },
+        },
+        'EXECUTE_PARALLEL'
+      )
+    );
+    activityMocks.executeParallelContainerRunActivity.mockResolvedValue({
+      overall_success: true,
+      completion: 'all_succeed',
+      succeeded: 1,
+      failed: 0,
+      results: [
+        { name: 'test-step', exit_code: 0, stdout: 'ok', stderr: '', duration_ms: 50 },
+      ],
+    });
+
+    const result = await aegis_workflow({
+      workflow_id: 'wf-1',
+      input: { container_image: 'python:3.11-slim', runner: 'python', language_ext: 'py' },
+    });
+
+    expect(result.status).toBe('completed');
+    expect(activityMocks.executeParallelContainerRunActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            image: 'python:3.11-slim',
+            command: ['python', '/workspace/solution.py'],
+          }),
+        ]),
+      })
+    );
+    // Confirm the raw template strings were NOT passed through
+    expect(activityMocks.executeParallelContainerRunActivity).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            image: '{{workflow.container_image}}',
+          }),
+        ]),
+      })
+    );
+  });
+
   it('routes on_failure for ParallelContainerRun when aggregation fails', async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue(
       baseDefinition(
