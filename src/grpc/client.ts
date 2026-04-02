@@ -7,6 +7,7 @@ import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+import { getServiceToken } from '../auth/token-manager.js';
 import type { 
   ExecuteAgentRequest,
   ExecutionEvent,
@@ -497,8 +498,11 @@ class AegisRuntimeClient {
     ttl_hours: number
     size_limit_mb: number
   }): Promise<{ volume_id: string; remote_path: string }> {
+    const token = await getServiceToken();
+    const meta = new grpc.Metadata();
+    meta.add('authorization', `Bearer ${token}`);
     return new Promise((resolve, reject) => {
-      this.client.CreateWorkspaceVolume(request, (error: Error | null, response: any) => {
+      this.client.CreateWorkspaceVolume(request, meta, (error: Error | null, response: any) => {
         if (error) {
           logger.error({ error, workflow_execution_id: request.workflow_execution_id }, 'Workspace volume creation failed')
           reject(error)
@@ -517,8 +521,11 @@ class AegisRuntimeClient {
     volume_id: string
     workflow_execution_id: string
   }): Promise<void> {
+    const token = await getServiceToken();
+    const meta = new grpc.Metadata();
+    meta.add('authorization', `Bearer ${token}`);
     return new Promise((resolve, reject) => {
-      this.client.DestroyWorkspaceVolume(request, (error: Error | null, response: any) => {
+      this.client.DestroyWorkspaceVolume(request, meta, (error: Error | null, response: any) => {
         if (error) {
           logger.error({ error, volume_id: request.volume_id }, 'Workspace volume destruction failed')
           reject(error)
