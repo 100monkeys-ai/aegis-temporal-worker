@@ -157,7 +157,7 @@ export interface WorkflowState {
   // Agent-specific fields
   agent?: string;
   input?: string;
-  isolation?: 'firecracker' | 'docker' | 'process';
+  isolation?: 'inherit' | 'firecracker' | 'docker' | 'process';
   timeout?: string;
 
   // Agent inner-loop validation (ADR-016 / ADR-017)
@@ -228,7 +228,7 @@ export interface ParallelAgentConfig {
  * Consensus configuration for ParallelAgents
  */
 export interface ConsensusConfig {
-  strategy: 'weighted_average' | 'majority_vote' | 'unanimous' | 'any_approved';
+  strategy: 'weighted_average' | 'majority_vote' | 'unanimous' | 'best_of_n';
   threshold?: number;
   agreement?: number;
   n?: number;
