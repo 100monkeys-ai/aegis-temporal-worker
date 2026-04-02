@@ -344,7 +344,7 @@ export async function createEphemeralWorkspaceActivity(params: {
 }): Promise<{ volume_id: string }> {
   logger.info({ execution_id: params.execution_id }, 'Creating ephemeral workspace volume')
   const response = await aegisRuntimeClient.createWorkspaceVolume({
-    execution_id: params.execution_id,
+    workflow_execution_id: params.execution_id,
     tenant_id: params.tenant_id,
     ttl_hours: params.ttl_hours,
     size_limit_mb: params.size_limit_mb,
@@ -364,8 +364,7 @@ export async function destroyWorkspaceVolumeActivity(params: {
   logger.info({ volume_id: params.volume_id }, 'Destroying workspace volume')
   await aegisRuntimeClient.destroyWorkspaceVolume({
     volume_id: params.volume_id,
-    tenant_id: params.tenant_id,
-    execution_id: params.execution_id,
+    workflow_execution_id: params.execution_id,
   })
   logger.info({ volume_id: params.volume_id }, 'Workspace volume destroyed')
 }
