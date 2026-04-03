@@ -178,6 +178,10 @@ class AegisRuntimeClient {
    * Execute an agent (streaming response for real-time events)
    */
   async executeAgent(request: ExecuteAgentRequest): Promise<ExecutionEvent[]> {
+    const token = await getServiceToken();
+    const metadata = new grpc.Metadata();
+    metadata.add('authorization', `Bearer ${token}`);
+
     return new Promise((resolve, reject) => {
       const events: ExecutionEvent[] = [];
       let settled = false;
@@ -186,7 +190,7 @@ class AegisRuntimeClient {
       let pollTimer: ReturnType<typeof setTimeout> | undefined;
       let fallbackPollInFlight = false;
 
-      const call = this.client.ExecuteAgent(request);
+      const call = this.client.ExecuteAgent(request, metadata);
 
       const cleanup = () => {
         if (idleTimer) {
