@@ -32,6 +32,9 @@ vi.mock('@grpc/grpc-js', () => ({
       },
     },
   })),
+  Metadata: class {
+    add(_key: string, _value: string) {}
+  },
 }));
 
 vi.mock('../config.js', () => ({
@@ -44,6 +47,10 @@ vi.mock('../config.js', () => ({
 
 vi.mock('../logger.js', () => ({
   logger: mocks.logger,
+}));
+
+vi.mock('../auth/token-manager.js', () => ({
+  getServiceToken: vi.fn().mockResolvedValue('test-token'),
 }));
 
 describe('AegisRuntimeClient.executeAgent', () => {
@@ -84,6 +91,8 @@ describe('AegisRuntimeClient.executeAgent', () => {
       context_json: '{}',
       timeout_seconds: 300,
     });
+
+    await Promise.resolve();
 
     call.emit('data', {
       event: 'execution_completed',
@@ -129,6 +138,8 @@ describe('AegisRuntimeClient.executeAgent', () => {
       parent_execution_id: 'parent-1',
     });
 
+    await Promise.resolve();
+
     call.emit('data', {
       event: 'execution_completed',
       execution_completed: {
@@ -168,6 +179,8 @@ describe('AegisRuntimeClient.executeAgent', () => {
       context_json: '{}',
       timeout_seconds: 300,
     });
+
+    await Promise.resolve();
 
     call.emit('data', {
       event: 'execution_failed',
@@ -212,6 +225,8 @@ describe('AegisRuntimeClient.executeAgent', () => {
       timeout_seconds: 300,
     });
 
+    await Promise.resolve();
+
     call.emit('error', new Error('stream failed'));
 
     await expect(promise).rejects.toThrow('stream failed');
@@ -234,6 +249,8 @@ describe('AegisRuntimeClient.executeAgent', () => {
       context_json: '{}',
       timeout_seconds: 300,
     });
+
+    await Promise.resolve();
 
     call.emit('data', {
       event: 'iteration_completed',
@@ -289,6 +306,8 @@ describe('AegisRuntimeClient.executeAgent', () => {
       context_json: '{}',
       timeout_seconds: 300,
     });
+
+    await Promise.resolve();
 
     call.emit('data', {
       event: 'iteration_failed',
