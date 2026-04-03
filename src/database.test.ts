@@ -52,7 +52,7 @@ describe('Database.saveWorkflowDefinition', () => {
 
     expect(sql).toContain('tenant_id');
     expect(sql).toContain('version');
-    expect(sql).toContain("ON CONFLICT (tenant_id, name, version, scope, COALESCE(owner_user_id, ''))");
+    expect(sql).toContain('ON CONFLICT (workflow_id)');
     expect(params).toEqual([
       'wf-1',
       'local',

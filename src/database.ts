@@ -60,14 +60,15 @@ export class Database {
         definition_hash
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
-      ON CONFLICT (tenant_id, name, version, scope, COALESCE(owner_user_id, ''))
+      ON CONFLICT (workflow_id)
       DO UPDATE SET
-        workflow_id = EXCLUDED.workflow_id,
+        name = EXCLUDED.name,
+        version = EXCLUDED.version,
+        scope = EXCLUDED.scope,
+        owner_user_id = EXCLUDED.owner_user_id,
         definition = EXCLUDED.definition,
         registered_at = NOW(),
-        definition_hash = EXCLUDED.definition_hash,
-        scope = EXCLUDED.scope,
-        owner_user_id = EXCLUDED.owner_user_id
+        definition_hash = EXCLUDED.definition_hash
     `;
 
     const definitionHash = this.hashDefinition(definition);

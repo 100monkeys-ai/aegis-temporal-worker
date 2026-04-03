@@ -3,7 +3,7 @@
  * Exposes endpoints for Rust orchestrator to register workflows
  */
 
-import express, { type Request, type Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { database } from './database.js';
@@ -180,7 +180,7 @@ app.delete('/workflows/:id', async (req: Request, res: Response) => {
 });
 
 // Error handling middleware
-app.use((err: Error, _req: Request, res: Response) => {
+app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   logger.error({ err }, 'Unhandled error in HTTP server');
   res.status(500).json({
     error: 'Internal server error',
