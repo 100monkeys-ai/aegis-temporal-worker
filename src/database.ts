@@ -16,8 +16,8 @@ export class Database {
     this.pool = new Pool({
       connectionString: config.database.url,
       max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 2000,
+      idleTimeoutMillis: 0,
+      connectionTimeoutMillis: 10000,
     });
 
     this.pool.on('error', (err) => {
