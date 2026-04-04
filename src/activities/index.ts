@@ -59,18 +59,28 @@ function normalizeAgentOutput(finalOutput: string | undefined): unknown {
   const rawOutput = finalOutput ?? '';
   const trimmedOutput = rawOutput.trim();
 
+  // Strip markdown code fences (```json ... ``` or ``` ... ```)
+  const stripped = trimmedOutput
+    .replace(
+      /^```(?:json|javascript|typescript|python|yaml|toml|bash|sh|text)?\s*\n?/i,
+      '',
+    )
+    .replace(/\n?```\s*$/, '')
+    .trim();
+
   if (
-    (trimmedOutput.startsWith('{') && trimmedOutput.endsWith('}')) ||
-    (trimmedOutput.startsWith('[') && trimmedOutput.endsWith(']'))
+    (stripped.startsWith('{') && stripped.endsWith('}')) ||
+    (stripped.startsWith('[') && stripped.endsWith(']'))
   ) {
     try {
-      return JSON.parse(trimmedOutput);
+      return JSON.parse(stripped);
     } catch {
-      // Preserve the raw payload if the agent produced non-JSON text that only looks JSON-like.
+      // Not valid JSON despite the shape — fall through to return stripped plain text.
     }
   }
 
-  return rawOutput;
+  // Return stripped text (fence removed) so Handlebars gets clean content even for non-JSON output.
+  return stripped || rawOutput;
 }
 
 /**
