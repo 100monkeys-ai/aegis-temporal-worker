@@ -256,7 +256,7 @@ describe('aegis_workflow container orchestration behavior', () => {
           BUILD: {
             kind: 'Agent',
             agent: 'builder-agent',
-            input: 'Repo {{repo}} for {{owner}} on {{workflow.name}} {{workflow.branch}}',
+            input: 'Repo {{repo}} for {{owner}} on {{workflow.name}} {{input.branch}}',
             transitions: [],
           },
         },
@@ -282,9 +282,11 @@ describe('aegis_workflow container orchestration behavior', () => {
         context: expect.objectContaining({
           owner: 'alice',
           repo: 'override-repo',
+          input: expect.objectContaining({
+            branch: 'main',
+          }),
           workflow: expect.objectContaining({
             name: 'ci-workflow',
-            branch: 'main',
           }),
         }),
       })
@@ -480,8 +482,8 @@ describe('aegis_workflow container orchestration behavior', () => {
         {
           EXECUTE_CODE: {
             kind: 'ContainerRun',
-            container_run_image: '{{workflow.container_image}}',
-            container_run_command: ['{{workflow.runner}}', '/workspace/solution.{{workflow.language_ext}}'],
+            container_run_image: '{{input.container_image}}',
+            container_run_command: ['{{input.runner}}', '/workspace/solution.{{input.language_ext}}'],
             transitions: [],
           },
         },
@@ -511,7 +513,7 @@ describe('aegis_workflow container orchestration behavior', () => {
     // Confirm the raw template strings were NOT passed through
     expect(activityMocks.executeContainerRunActivity).not.toHaveBeenCalledWith(
       expect.objectContaining({
-        image: '{{workflow.container_image}}',
+        image: '{{input.container_image}}',
       })
     );
   });
@@ -525,8 +527,8 @@ describe('aegis_workflow container orchestration behavior', () => {
             parallel_container_steps: [
               {
                 name: 'test-step',
-                image: '{{workflow.container_image}}',
-                command: ['{{workflow.runner}}', '/workspace/solution.{{workflow.language_ext}}'],
+                image: '{{input.container_image}}',
+                command: ['{{input.runner}}', '/workspace/solution.{{input.language_ext}}'],
               },
             ],
             parallel_container_completion: 'all_succeed',
@@ -567,7 +569,7 @@ describe('aegis_workflow container orchestration behavior', () => {
       expect.objectContaining({
         steps: expect.arrayContaining([
           expect.objectContaining({
-            image: '{{workflow.container_image}}',
+            image: '{{input.container_image}}',
           }),
         ]),
       })

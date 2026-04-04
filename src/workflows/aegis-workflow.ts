@@ -69,6 +69,8 @@ Handlebars.registerHelper('default', (value: any, fallback: any) =>
 interface GenericWorkflowInput {
     workflow_id: string;
     input: Record<string, any>;
+    /** ADR-092: Natural-language steering extracted from the caller's request. */
+    intent?: string;
     blackboard?: Record<string, any>;
     /** Tenant slug derived from the caller's JWT. Threaded through all
      *  downstream gRPC calls for tenant-scoped isolation. */
@@ -88,7 +90,7 @@ interface GenericWorkflowInput {
  * at runtime and executes it step-by-step.
  */
 export async function aegis_workflow(args: GenericWorkflowInput): Promise<WorkflowResult> {
-    const { workflow_id, input, blackboard: blackboardOverridesArg, tenant_id, security_context_name } = args;
+    const { workflow_id, input, intent: argsIntent, blackboard: blackboardOverridesArg, tenant_id, security_context_name } = args;
     let blackboardOverrides = blackboardOverridesArg;
     const info = workflowInfo();
     const executionId = info.workflowId; // In AEGIS, Temporal workflowId is the Execution UUID
@@ -148,15 +150,18 @@ export async function aegis_workflow(args: GenericWorkflowInput): Promise<Workfl
         blackboardOverrides = { ...(blackboardOverrides ?? {}), [bbKey]: ws.volume_id }
     }
 
-    // 2. Initialize Blackboard
+    // 2. Initialize Blackboard (ADR-092: intent + input namespace)
     const blackboard: Blackboard = {
         ...definition.context,
         ...(blackboardOverrides ?? {}),
         tenant_id: resolvedTenantId,
+        intent: argsIntent ?? '',
+        input: input,
         workflow: {
             name: definition.name,
             version: definition.version,
-            ...input,
+            context: definition.context ?? {},
+            storage: definition.spec_storage ?? {},
         },
     };
 
@@ -506,13 +511,11 @@ async function executeState(
                 }
             }
 
-            // ADR-087 Layer 2: inject workflow inputs as INTENT_INPUTS for parametric scripts
-            if (blackboard.workflow) {
-                const workflowInputs = { ...blackboard.workflow }
-                delete workflowInputs.name
-                delete workflowInputs.version
-                if (Object.keys(workflowInputs).length > 0) {
-                    crEnv['INTENT_INPUTS'] = JSON.stringify(workflowInputs)
+            // ADR-092: inject caller-supplied input fields as INTENT_INPUTS for parametric scripts
+            if (blackboard.input && typeof blackboard.input === 'object') {
+                const inputObj = blackboard.input as Record<string, unknown>;
+                if (Object.keys(inputObj).length > 0) {
+                    crEnv['INTENT_INPUTS'] = JSON.stringify(inputObj);
                 }
             }
 
