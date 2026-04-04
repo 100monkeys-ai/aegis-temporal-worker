@@ -384,7 +384,7 @@ async function executeState(
                     }
 
                     const validationResult = await validateOutputActivity({
-                        output: result.output,
+                        output: typeof result.output === 'string' ? result.output : JSON.stringify(result.output),
                         task: currentInput,
                         judges,
                         consensus_strategy: state.consensus?.strategy,
