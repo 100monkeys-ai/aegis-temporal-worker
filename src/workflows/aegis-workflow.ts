@@ -433,6 +433,12 @@ async function executeState(
             resolvedAgent === "workflow-creator-validator-agent" ||
             stateName === "GENERATE_AND_REGISTER_WORKFLOW";
 
+          const workspaceVolumeId =
+            typeof blackboard.workspace_volume_id === "string" &&
+            blackboard.workspace_volume_id.length > 0
+              ? blackboard.workspace_volume_id
+              : undefined;
+
           const result = await (
             isTerminalValidationAgent
               ? executeAgentTerminalActivity
@@ -443,6 +449,10 @@ async function executeState(
             context: blackboard,
             workflowExecutionId: executionId,
             securityContextName,
+            workspaceVolumeId,
+            workspaceVolumeMountPath: workspaceVolumeId
+              ? "/workspace"
+              : undefined,
           });
 
           lastOutput = result;

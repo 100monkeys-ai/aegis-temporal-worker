@@ -124,6 +124,8 @@ export async function executeAgentActivity(params: {
   workflowExecutionId?: string;
   parentExecutionId?: string;
   securityContextName?: string;
+  workspaceVolumeId?: string;
+  workspaceVolumeMountPath?: string;
 }): Promise<any> {
   logger.info({ agent_id: params.agentId }, "Executing agent activity");
 
@@ -150,6 +152,12 @@ export async function executeAgentActivity(params: {
 
   if (params.securityContextName) {
     request.security_context_name = params.securityContextName;
+  }
+
+  if (params.workspaceVolumeId) {
+    request.workspace_volume_id = params.workspaceVolumeId;
+    request.workspace_volume_mount_path =
+      params.workspaceVolumeMountPath ?? "/workspace";
   }
 
   try {

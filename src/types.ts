@@ -392,6 +392,15 @@ export interface ExecuteAgentRequest {
   /** Security context name for policy enforcement.
    * Maps to proto field security_context_name (field 8). */
   security_context_name?: string;
+  /** Workflow workspace volume ID to mount into the agent container.
+   * When set, the runtime mounts this volume so the agent writes into the
+   * shared workspace that subsequent workflow steps can read.
+   * Maps to proto field workspace_volume_id (field 10). */
+  workspace_volume_id?: string;
+  /** Container path at which the workspace volume is mounted.
+   * Defaults to /workspace when workspace_volume_id is provided.
+   * Maps to proto field workspace_volume_mount_path (field 11). */
+  workspace_volume_mount_path?: string;
 }
 
 /**
