@@ -3,9 +3,9 @@
  * Activities call back to Rust services via gRPC
  */
 
-import { logger } from '../logger.js';
-import { aegisRuntimeClient } from '../grpc/client.js';
-import { getServiceToken } from '../auth/token-manager.js';
+import { logger } from "../logger.js";
+import { aegisRuntimeClient } from "../grpc/client.js";
+import { getServiceToken } from "../auth/token-manager.js";
 import type {
   ExecuteAgentRequest,
   ExecuteSystemCommandRequest,
@@ -16,8 +16,8 @@ import type {
   ExecuteContainerRunRequest,
   ExecuteContainerRunResponse,
   ContainerRunConfig,
-} from '../types.js';
-import { fetchWorkflowDefinition } from './workflow-activities.js';
+} from "../types.js";
+import { fetchWorkflowDefinition } from "./workflow-activities.js";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -33,9 +33,12 @@ async function resolveAgentId(nameOrId: string): Promise<string> {
   if (UUID_PATTERN.test(nameOrId)) {
     return nameOrId;
   }
-  logger.warn({ agent_name: nameOrId }, 'agent_id is not a UUID — resolving via REST');
+  logger.warn(
+    { agent_name: nameOrId },
+    "agent_id is not a UUID — resolving via REST",
+  );
   const orchestratorUrl =
-    process.env.AEGIS_ORCHESTRATOR_URL || 'http://localhost:8088';
+    process.env.AEGIS_ORCHESTRATOR_URL || "http://localhost:8088";
   const token = await getServiceToken();
   const resp = await fetch(
     `${orchestratorUrl}/v1/agents/lookup/${encodeURIComponent(nameOrId)}`,
@@ -50,27 +53,27 @@ async function resolveAgentId(nameOrId: string): Promise<string> {
   const data = (await resp.json()) as { id: string };
   logger.info(
     { agent_name: nameOrId, resolved_id: data.id },
-    'Resolved agent name to UUID',
+    "Resolved agent name to UUID",
   );
   return data.id;
 }
 
 function normalizeAgentOutput(finalOutput: string | undefined): unknown {
-  const rawOutput = finalOutput ?? '';
+  const rawOutput = finalOutput ?? "";
   const trimmedOutput = rawOutput.trim();
 
   // Strip markdown code fences (```json ... ``` or ``` ... ```)
   const stripped = trimmedOutput
     .replace(
       /^```(?:json|javascript|typescript|python|yaml|toml|bash|sh|text)?\s*\n?/i,
-      '',
+      "",
     )
-    .replace(/\n?```\s*$/, '')
+    .replace(/\n?```\s*$/, "")
     .trim();
 
   if (
-    (stripped.startsWith('{') && stripped.endsWith('}')) ||
-    (stripped.startsWith('[') && stripped.endsWith(']'))
+    (stripped.startsWith("{") && stripped.endsWith("}")) ||
+    (stripped.startsWith("[") && stripped.endsWith("]"))
   ) {
     try {
       return JSON.parse(stripped);
@@ -94,7 +97,7 @@ export async function executeAgentActivity(params: {
   parentExecutionId?: string;
   securityContextName?: string;
 }): Promise<any> {
-  logger.info({ agent_id: params.agentId }, 'Executing agent activity');
+  logger.info({ agent_id: params.agentId }, "Executing agent activity");
 
   const resolvedAgentId = await resolveAgentId(params.agentId);
 
@@ -102,7 +105,7 @@ export async function executeAgentActivity(params: {
     agent_id: resolvedAgentId,
     input: params.input,
     context_json: JSON.stringify(params.context),
-    timeout_seconds: 300,
+    timeout_seconds: 600,
   };
 
   if (params.workflowExecutionId) {
@@ -122,12 +125,14 @@ export async function executeAgentActivity(params: {
     const events = await aegisRuntimeClient.executeAgent(request);
 
     // Extract final result from events
-    const completedEvent = events.find(e => e.event_type === 'ExecutionCompleted');
-    const failedEvent = events.find(e => e.event_type === 'ExecutionFailed');
+    const completedEvent = events.find(
+      (e) => e.event_type === "ExecutionCompleted",
+    );
+    const failedEvent = events.find((e) => e.event_type === "ExecutionFailed");
 
     if (completedEvent) {
       return {
-        status: 'completed',
+        status: "completed",
         output: normalizeAgentOutput(completedEvent.final_output),
         iterations: completedEvent.total_iterations || 0,
       };
@@ -135,15 +140,18 @@ export async function executeAgentActivity(params: {
 
     if (failedEvent) {
       return {
-        status: 'failed',
-        error: failedEvent.reason || 'Unknown error',
+        status: "failed",
+        error: failedEvent.reason || "Unknown error",
         iterations: failedEvent.total_iterations || 0,
       };
     }
 
-    throw new Error('No completion or failure event received');
+    throw new Error("No completion or failure event received");
   } catch (error) {
-    logger.error({ error, agent_id: params.agentId }, 'Agent execution activity failed');
+    logger.error(
+      { error, agent_id: params.agentId },
+      "Agent execution activity failed",
+    );
     throw error;
   }
 }
@@ -157,7 +165,7 @@ export async function executeSystemCommandActivity(params: {
   workdir?: string;
   timeout?: number;
 }): Promise<any> {
-  logger.info({ command: params.command }, 'Executing system command activity');
+  logger.info({ command: params.command }, "Executing system command activity");
 
   const request: ExecuteSystemCommandRequest = {
     command: params.command,
@@ -170,13 +178,16 @@ export async function executeSystemCommandActivity(params: {
     const response = await aegisRuntimeClient.executeSystemCommand(request);
 
     return {
-      status: response.exit_code === 0 ? 'success' : 'failed',
+      status: response.exit_code === 0 ? "success" : "failed",
       exit_code: response.exit_code,
       stdout: response.stdout,
       stderr: response.stderr,
     };
   } catch (error) {
-    logger.error({ error, command: params.command }, 'System command activity failed');
+    logger.error(
+      { error, command: params.command },
+      "System command activity failed",
+    );
     throw error;
   }
 }
@@ -193,14 +204,24 @@ export async function validateOutputActivity(params: {
   context_json?: string;
   securityContextName?: string;
 }): Promise<any> {
-  logger.info({ judge_count: params.judges.length }, 'Validating output with judges');
+  logger.info(
+    { judge_count: params.judges.length },
+    "Validating output with judges",
+  );
 
   const request: ValidateRequest = {
     output: params.output,
     task: params.task,
-    judges: params.judges.map(j => ({ agent_id: j.agent_id, weight: j.weight, input_template: j.input_template })),
+    judges: params.judges.map((j) => ({
+      agent_id: j.agent_id,
+      weight: j.weight,
+      input_template: j.input_template,
+    })),
     consensus: params.consensus_strategy
-      ? { strategy: params.consensus_strategy, threshold: params.consensus_threshold ?? 0.8 }
+      ? {
+          strategy: params.consensus_strategy,
+          threshold: params.consensus_threshold ?? 0.8,
+        }
       : undefined,
     context_json: params.context_json,
     security_context_name: params.securityContextName,
@@ -217,7 +238,7 @@ export async function validateOutputActivity(params: {
       reasoning: response.reasoning,
     };
   } catch (error) {
-    logger.error({ error }, 'Validation activity failed');
+    logger.error({ error }, "Validation activity failed");
     throw error;
   }
 }
@@ -228,14 +249,21 @@ export async function validateOutputActivity(params: {
 export async function executeParallelAgentsActivity(params: {
   agents: Array<{ agent: string; input: string; weight?: number }>;
   /** External judge agents from the state's `judges_for_parallel` field (ADR-016). */
-  judges?: Array<{ agent_id: string; weight?: number; input_template?: string }>;
+  judges?: Array<{
+    agent_id: string;
+    weight?: number;
+    input_template?: string;
+  }>;
   consensus: {
     strategy: string;
     threshold: number;
   };
   securityContextName?: string;
 }): Promise<any> {
-  logger.info({ agent_count: params.agents.length }, 'Executing parallel agents');
+  logger.info(
+    { agent_count: params.agents.length },
+    "Executing parallel agents",
+  );
 
   try {
     // Execute all agents in parallel
@@ -246,22 +274,26 @@ export async function executeParallelAgentsActivity(params: {
           agent_id: resolvedAgent,
           input: agentConfig.input,
           context_json: JSON.stringify({ input: agentConfig.input }),
-          timeout_seconds: 300,
+          timeout_seconds: 600,
           security_context_name: params.securityContextName,
         });
 
         // Extract output
-        const completedEvent = events.find(e => e.event_type === 'ExecutionCompleted');
+        const completedEvent = events.find(
+          (e) => e.event_type === "ExecutionCompleted",
+        );
         if (completedEvent) {
           return {
-            output: completedEvent.final_output || '',
+            output: completedEvent.final_output || "",
             agent: agentConfig.agent,
             weight: agentConfig.weight || 1.0,
           };
         }
 
-        throw new Error(`Agent ${agentConfig.agent} did not complete successfully`);
-      })
+        throw new Error(
+          `Agent ${agentConfig.agent} did not complete successfully`,
+        );
+      }),
     );
 
     // All agents completed – validate the combined output with dedicated judge agents.
@@ -275,15 +307,18 @@ export async function executeParallelAgentsActivity(params: {
           confidence: 1.0,
           strategy: params.consensus.strategy,
           metadata: {
-            individual_outputs: results.map(r => r.output),
+            individual_outputs: results.map((r) => r.output),
             individual_results: [],
-            reasoning: 'No judge agents configured for this ParallelAgents state',
+            reasoning:
+              "No judge agents configured for this ParallelAgents state",
           },
         },
       };
     }
 
-    const outputsForValidation = results.map(r => `[${r.agent}]:\n${r.output}`).join('\n\n---\n\n');
+    const outputsForValidation = results
+      .map((r) => `[${r.agent}]:\n${r.output}`)
+      .join("\n\n---\n\n");
 
     const validationResult = await aegisRuntimeClient.validateWithJudges({
       output: outputsForValidation,
@@ -302,14 +337,14 @@ export async function executeParallelAgentsActivity(params: {
         binary_valid: validationResult.binary_valid,
         strategy: params.consensus.strategy,
         metadata: {
-          individual_outputs: results.map(r => r.output),
+          individual_outputs: results.map((r) => r.output),
           individual_results: validationResult.individual_results,
           reasoning: validationResult.reasoning,
         },
       },
     };
   } catch (error) {
-    logger.error({ error }, 'Parallel agents activity failed');
+    logger.error({ error }, "Parallel agents activity failed");
     throw error;
   }
 }
@@ -322,7 +357,10 @@ export async function storeTrajectoryPatternActivity(params: {
   steps: TrajectoryStep[];
   successScore: number;
 }): Promise<any> {
-  logger.info({ task_signature: params.taskSignature, step_count: params.steps.length }, 'Storing trajectory pattern');
+  logger.info(
+    { task_signature: params.taskSignature, step_count: params.steps.length },
+    "Storing trajectory pattern",
+  );
 
   const request: StoreTrajectoryPatternRequest = {
     task_signature: params.taskSignature,
@@ -339,47 +377,56 @@ export async function storeTrajectoryPatternActivity(params: {
     };
   } catch (error) {
     // Cortex storage failure must never crash the workflow — log and swallow.
-    logger.warn({ error, task_signature: params.taskSignature }, 'Trajectory pattern storage failed (non-fatal)');
+    logger.warn(
+      { error, task_signature: params.taskSignature },
+      "Trajectory pattern storage failed (non-fatal)",
+    );
     return null;
   }
 }
 
-import { publishEventActivity } from './event-activities.js';
+import { publishEventActivity } from "./event-activities.js";
 
 /**
  * Create an ephemeral workspace volume for a workflow execution (ADR-087)
  */
 export async function createEphemeralWorkspaceActivity(params: {
-  execution_id: string
-  ttl_hours: number
-  tenant_id: string
-  size_limit_mb: number
+  execution_id: string;
+  ttl_hours: number;
+  tenant_id: string;
+  size_limit_mb: number;
 }): Promise<{ volume_id: string }> {
-  logger.info({ execution_id: params.execution_id }, 'Creating ephemeral workspace volume')
+  logger.info(
+    { execution_id: params.execution_id },
+    "Creating ephemeral workspace volume",
+  );
   const response = await aegisRuntimeClient.createWorkspaceVolume({
     workflow_execution_id: params.execution_id,
     tenant_id: params.tenant_id,
     ttl_hours: params.ttl_hours,
     size_limit_mb: params.size_limit_mb,
-  })
-  logger.info({ volume_id: response.volume_id }, 'Ephemeral workspace volume created')
-  return { volume_id: response.volume_id }
+  });
+  logger.info(
+    { volume_id: response.volume_id },
+    "Ephemeral workspace volume created",
+  );
+  return { volume_id: response.volume_id };
 }
 
 /**
  * Destroy a workspace volume after workflow completion (ADR-087)
  */
 export async function destroyWorkspaceVolumeActivity(params: {
-  volume_id: string
-  execution_id: string
-  tenant_id: string
+  volume_id: string;
+  execution_id: string;
+  tenant_id: string;
 }): Promise<void> {
-  logger.info({ volume_id: params.volume_id }, 'Destroying workspace volume')
+  logger.info({ volume_id: params.volume_id }, "Destroying workspace volume");
   await aegisRuntimeClient.destroyWorkspaceVolume({
     volume_id: params.volume_id,
     workflow_execution_id: params.execution_id,
-  })
-  logger.info({ volume_id: params.volume_id }, 'Workspace volume destroyed')
+  });
+  logger.info({ volume_id: params.volume_id }, "Workspace volume destroyed");
 }
 
 /**
@@ -390,22 +437,29 @@ export async function destroyWorkspaceVolumeActivity(params: {
  * max_attempts controls how many times the orchestrator retries before surfacing failure.
  */
 export async function executeContainerRunActivity(
-  params: ExecuteContainerRunRequest
+  params: ExecuteContainerRunRequest,
 ): Promise<ExecuteContainerRunResponse> {
   logger.info(
     { state_name: params.state_name, image: params.image },
-    'Executing container run activity'
+    "Executing container run activity",
   );
 
   try {
     const response = await aegisRuntimeClient.executeContainerRun(params);
     logger.info(
-      { state_name: params.state_name, exit_code: response.exit_code, attempts: response.attempts },
-      'Container run activity completed'
+      {
+        state_name: params.state_name,
+        exit_code: response.exit_code,
+        attempts: response.attempts,
+      },
+      "Container run activity completed",
     );
     return response;
   } catch (error) {
-    logger.error({ error, state_name: params.state_name }, 'Container run activity failed');
+    logger.error(
+      { error, state_name: params.state_name },
+      "Container run activity failed",
+    );
     throw error;
   }
 }
@@ -423,19 +477,29 @@ export async function executeParallelContainerRunActivity(params: {
   execution_id: string;
   state_name: string;
   steps: ContainerRunConfig[];
-  completion: 'all_succeed' | 'any_succeed' | 'best_effort';
+  completion: "all_succeed" | "any_succeed" | "best_effort";
   image_pull_policy?: string;
   securityContextName?: string;
 }): Promise<{
-  results: Array<{ name: string; exit_code: number; stdout: string; stderr: string; duration_ms: number }>;
+  results: Array<{
+    name: string;
+    exit_code: number;
+    stdout: string;
+    stderr: string;
+    duration_ms: number;
+  }>;
   overall_success: boolean;
   succeeded: number;
   failed: number;
-  completion: 'all_succeed' | 'any_succeed' | 'best_effort';
+  completion: "all_succeed" | "any_succeed" | "best_effort";
 }> {
   logger.info(
-    { state_name: params.state_name, step_count: params.steps.length, completion: params.completion },
-    'Executing parallel container run activity'
+    {
+      state_name: params.state_name,
+      step_count: params.steps.length,
+      completion: params.completion,
+    },
+    "Executing parallel container run activity",
   );
 
   const settled = await Promise.allSettled(
@@ -458,22 +522,22 @@ export async function executeParallelContainerRunActivity(params: {
       };
       const response = await aegisRuntimeClient.executeContainerRun(request);
       return { name: step.name, ...response };
-    })
+    }),
   );
 
   const results = settled.map((r, i) => {
-    if (r.status === 'fulfilled') {
+    if (r.status === "fulfilled") {
       return r.value;
     }
     // Rejected promise — surface as a non-zero exit code so transition conditions can route on it
     logger.error(
       { step: params.steps[i].name, error: r.reason },
-      'Parallel container step failed with exception'
+      "Parallel container step failed with exception",
     );
     return {
       name: params.steps[i].name,
       exit_code: 1,
-      stdout: '',
+      stdout: "",
       stderr: r.reason instanceof Error ? r.reason.message : String(r.reason),
       duration_ms: 0,
     };
@@ -483,13 +547,13 @@ export async function executeParallelContainerRunActivity(params: {
 
   let overall_success: boolean;
   switch (params.completion) {
-    case 'all_succeed':
+    case "all_succeed":
       overall_success = successCount === results.length;
       break;
-    case 'any_succeed':
+    case "any_succeed":
       overall_success = successCount > 0;
       break;
-    case 'best_effort':
+    case "best_effort":
     default:
       overall_success = true;
       break;
@@ -504,7 +568,7 @@ export async function executeParallelContainerRunActivity(params: {
       completion: params.completion,
       overall_success,
     },
-    'Parallel container run activity completed'
+    "Parallel container run activity completed",
   );
 
   return {
@@ -532,5 +596,3 @@ export const activities = {
 };
 
 export { fetchWorkflowDefinition, publishEventActivity };
-
-
