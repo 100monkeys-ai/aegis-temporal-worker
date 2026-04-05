@@ -39,23 +39,46 @@ async function resolveAgentId(nameOrId: string): Promise<string> {
   );
   const orchestratorUrl =
     process.env.AEGIS_ORCHESTRATOR_URL || "http://localhost:8088";
-  const token = await getServiceToken();
-  const resp = await fetch(
-    `${orchestratorUrl}/v1/agents/lookup/${encodeURIComponent(nameOrId)}`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  );
-  if (!resp.ok) {
+  const url = `${orchestratorUrl}/v1/agents/lookup/${encodeURIComponent(nameOrId)}`;
+
+  const MAX_RETRIES = 5;
+  const BASE_DELAY_MS = 500;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const token = await getServiceToken();
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (resp.ok) {
+      const data = (await resp.json()) as { id: string };
+      logger.info(
+        { agent_name: nameOrId, resolved_id: data.id, attempt },
+        "Resolved agent name to UUID",
+      );
+      return data.id;
+    }
+
+    if (resp.status === 404 && attempt < MAX_RETRIES) {
+      const delay = BASE_DELAY_MS * Math.pow(2, attempt);
+      logger.warn(
+        { agent_name: nameOrId, attempt, delay_ms: delay },
+        "Agent not yet visible in registry — retrying",
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      continue;
+    }
+
     throw new Error(
       `Agent '${nameOrId}' not found (HTTP ${resp.status}). ` +
         `Deploy it with 'aegis agent deploy' before running this workflow.`,
     );
   }
-  const data = (await resp.json()) as { id: string };
-  logger.info(
-    { agent_name: nameOrId, resolved_id: data.id },
-    "Resolved agent name to UUID",
+
+  // Unreachable — loop always returns or throws — but satisfies TypeScript.
+  throw new Error(
+    `Agent '${nameOrId}' not found after ${MAX_RETRIES} retries.`,
   );
-  return data.id;
 }
 
 function normalizeAgentOutput(finalOutput: string | undefined): unknown {
