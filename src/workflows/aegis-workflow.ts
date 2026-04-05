@@ -232,8 +232,9 @@ export async function aegis_workflow(
         output: stateOutput,
       });
 
-      // Update Blackboard — wrap in { output } so templates reference {{STATE.output.field}}
-      blackboard[currentState] = { output: stateOutput };
+      // Update Blackboard — state handlers already return structured objects
+      // with `status` at root and `output` nested, so store directly.
+      blackboard[currentState] = stateOutput;
 
       // Check Terminal
       if (!state.transitions || state.transitions.length === 0) {
@@ -840,9 +841,9 @@ async function executeState(
           throw error;
         }
 
-        // Write result to parent blackboard under result_key — wrap in { output } for consistent template access
+        // Write result to parent blackboard under result_key
         const resultKey = state.subworkflow_result_key ?? `${stateName}_result`;
-        blackboard[resultKey] = { output: childResult };
+        blackboard[resultKey] = childResult;
 
         await emit("SubworkflowCompleted", {
           child_execution_id: childExecutionId,

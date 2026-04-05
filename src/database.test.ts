@@ -59,7 +59,6 @@ describe("Database.saveWorkflowDefinition", () => {
       "builtin-workflow-generator",
       "1.0.0",
       "tenant",
-      null,
       expect.any(String),
       expect.any(String),
     ]);
