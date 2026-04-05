@@ -586,6 +586,7 @@ async function executeState(
           threshold: state.consensus.threshold ?? 0.7,
         },
         securityContextName,
+        tenantId: blackboard.tenant_id as string | undefined,
       });
 
     case "ContainerRun": {
@@ -827,6 +828,7 @@ async function executeState(
                 blackboard: {},
                 parent_execution_id: executionId,
                 security_context_name: securityContextName,
+                tenant_id: blackboard.tenant_id as string | undefined,
               },
             ],
             workflowId: `${childWorkflowId}-${childExecutionId}`,
@@ -863,6 +865,7 @@ async function executeState(
               blackboard: {},
               parent_execution_id: executionId,
               security_context_name: securityContextName,
+              tenant_id: blackboard.tenant_id as string | undefined,
             },
           ],
           workflowId: `${childWorkflowId}-${childExecutionId}`,

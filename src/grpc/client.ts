@@ -182,6 +182,9 @@ class AegisRuntimeClient {
     const token = await getServiceToken();
     const metadata = new grpc.Metadata();
     metadata.add("authorization", `Bearer ${token}`);
+    if (request.tenant_id) {
+      metadata.add("x-tenant-id", request.tenant_id);
+    }
 
     return new Promise((resolve, reject) => {
       const events: ExecutionEvent[] = [];

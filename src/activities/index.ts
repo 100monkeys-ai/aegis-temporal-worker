@@ -29,7 +29,10 @@ const UUID_PATTERN =
  * and gRPC-side lookup in server.rs (Phase 1b) handle most cases; this provides
  * a final defence for any path that bypasses those layers.
  */
-async function resolveAgentId(nameOrId: string): Promise<string> {
+async function resolveAgentId(
+  nameOrId: string,
+  tenantId?: string,
+): Promise<string> {
   if (UUID_PATTERN.test(nameOrId)) {
     return nameOrId;
   }
@@ -46,9 +49,11 @@ async function resolveAgentId(nameOrId: string): Promise<string> {
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const token = await getServiceToken();
-    const resp = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+    };
+    if (tenantId) headers["X-Tenant-Id"] = tenantId;
+    const resp = await fetch(url, { headers });
 
     if (resp.ok) {
       const data = (await resp.json()) as { id: string };
@@ -122,13 +127,17 @@ export async function executeAgentActivity(params: {
 }): Promise<any> {
   logger.info({ agent_id: params.agentId }, "Executing agent activity");
 
-  const resolvedAgentId = await resolveAgentId(params.agentId);
+  const resolvedAgentId = await resolveAgentId(
+    params.agentId,
+    params.context?.tenant_id as string | undefined,
+  );
 
   const request: ExecuteAgentRequest = {
     agent_id: resolvedAgentId,
     input: params.input,
     context_json: JSON.stringify(params.context),
     timeout_seconds: 600,
+    tenant_id: params.context?.tenant_id as string | undefined,
   };
 
   if (params.workflowExecutionId) {
@@ -282,6 +291,7 @@ export async function executeParallelAgentsActivity(params: {
     threshold: number;
   };
   securityContextName?: string;
+  tenantId?: string;
 }): Promise<any> {
   logger.info(
     { agent_count: params.agents.length },
@@ -292,13 +302,17 @@ export async function executeParallelAgentsActivity(params: {
     // Execute all agents in parallel
     const results = await Promise.all(
       params.agents.map(async (agentConfig) => {
-        const resolvedAgent = await resolveAgentId(agentConfig.agent);
+        const resolvedAgent = await resolveAgentId(
+          agentConfig.agent,
+          params.tenantId,
+        );
         const events = await aegisRuntimeClient.executeAgent({
           agent_id: resolvedAgent,
           input: agentConfig.input,
           context_json: JSON.stringify({ input: agentConfig.input }),
           timeout_seconds: 600,
           security_context_name: params.securityContextName,
+          tenant_id: params.tenantId,
         });
 
         // Extract output
