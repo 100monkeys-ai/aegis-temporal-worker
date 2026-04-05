@@ -448,7 +448,8 @@ async function executeState(
             input: currentInput,
             context: blackboard,
             workflowExecutionId: executionId,
-            securityContextName,
+            securityContextName:
+              state.security_context_name ?? securityContextName,
             workspaceVolumeId,
             workspaceVolumeMountPath: workspaceVolumeId
               ? "/workspace"
