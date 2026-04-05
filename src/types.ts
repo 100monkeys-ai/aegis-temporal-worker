@@ -156,8 +156,6 @@ export interface WorkflowState {
   agent?: string;
   input?: string;
   isolation?: "inherit" | "firecracker" | "docker" | "process";
-  /** Per-state security context override; takes precedence over the workflow-level security_context_name. */
-  security_context_name?: string;
   timeout?: string;
 
   // Agent inner-loop validation (ADR-016 / ADR-017)
