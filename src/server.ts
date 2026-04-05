@@ -3,19 +3,23 @@
  * Exposes endpoints for Rust orchestrator to register workflows
  */
 
-import express, { type NextFunction, type Request, type Response } from 'express';
-import { config } from './config.js';
-import { logger } from './logger.js';
-import { database } from './database.js';
-import type { TemporalWorkflowDefinition } from './types.js';
+import express, {
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
+import { config } from "./config.js";
+import { logger } from "./logger.js";
+import { database } from "./database.js";
+import type { TemporalWorkflowDefinition } from "./types.js";
 
 const app = express();
 
 // Middleware
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: "10mb" }));
 
 function getSingleParam(param: string | string[] | undefined): string | null {
-  if (typeof param === 'string') {
+  if (typeof param === "string") {
     return param;
   }
 
@@ -27,34 +31,35 @@ function getSingleParam(param: string | string[] | undefined): string | null {
 }
 
 export function isWorkflowDefinitionRegistrationPayload(
-  definition: Partial<TemporalWorkflowDefinition> | null | undefined
+  definition: Partial<TemporalWorkflowDefinition> | null | undefined,
 ): definition is TemporalWorkflowDefinition {
   return Boolean(
     definition &&
-      definition.workflow_id &&
-      definition.tenant_id &&
-      definition.name &&
-      definition.version &&
-      definition.states
+    definition.workflow_id &&
+    definition.tenant_id &&
+    definition.name &&
+    definition.version &&
+    definition.states,
   );
 }
 
 // Health check endpoint
-app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+app.get("/health", (_req: Request, res: Response) => {
+  res.json({ status: "healthy", timestamp: new Date().toISOString() });
 });
 
 // Register workflow endpoint
 // Called by Rust orchestrator after mapping Workflow domain object
-app.post('/register-workflow', async (req: Request, res: Response) => {
+app.post("/register-workflow", async (req: Request, res: Response) => {
   try {
     const definition = req.body as Partial<TemporalWorkflowDefinition>;
 
     // Validate definition
     if (!isWorkflowDefinitionRegistrationPayload(definition)) {
       return res.status(400).json({
-        error: 'Invalid workflow definition',
-        message: 'Missing required fields: workflow_id, tenant_id, name, version, or states',
+        error: "Invalid workflow definition",
+        message:
+          "Missing required fields: workflow_id, tenant_id, name, version, or states",
       });
     }
 
@@ -65,7 +70,7 @@ app.post('/register-workflow', async (req: Request, res: Response) => {
         name: definition.name,
         version: definition.version,
       },
-      'Registering workflow'
+      "Registering workflow",
     );
 
     // Save to database (for multi-worker coordination)
@@ -78,34 +83,34 @@ app.post('/register-workflow', async (req: Request, res: Response) => {
         name: definition.name,
         version: definition.version,
       },
-      'Workflow registered successfully'
+      "Workflow registered successfully",
     );
 
     res.status(200).json({
-      status: 'registered',
+      status: "registered",
       workflow_id: definition.workflow_id,
       tenant_id: definition.tenant_id,
       name: definition.name,
       version: definition.version,
     });
   } catch (error) {
-    logger.error({ error }, 'Failed to register workflow');
+    logger.error({ error }, "Failed to register workflow");
     res.status(500).json({
-      error: 'Registration failed',
-      message: error instanceof Error ? error.message : 'Unknown error',
+      error: "Registration failed",
+      message: error instanceof Error ? error.message : "Unknown error",
     });
   }
 });
 
 // Get workflow definition endpoint
 // Called by Rust orchestrator to verify registration
-app.get('/workflows/:id', async (req: Request, res: Response) => {
+app.get("/workflows/:id", async (req: Request, res: Response) => {
   try {
     const id = getSingleParam(req.params.id);
 
     if (!id) {
       return res.status(400).json({
-        error: 'Invalid workflow ID',
+        error: "Invalid workflow ID",
       });
     }
 
@@ -113,23 +118,26 @@ app.get('/workflows/:id', async (req: Request, res: Response) => {
 
     if (!definition) {
       return res.status(404).json({
-        error: 'Workflow not found',
+        error: "Workflow not found",
         workflow_id: id,
       });
     }
 
     res.json(definition);
   } catch (error) {
-    logger.error({ error, workflow_id: req.params.id }, 'Failed to get workflow definition');
+    logger.error(
+      { error, workflow_id: req.params.id },
+      "Failed to get workflow definition",
+    );
     res.status(500).json({
-      error: 'Failed to retrieve workflow',
-      message: error instanceof Error ? error.message : 'Unknown error',
+      error: "Failed to retrieve workflow",
+      message: error instanceof Error ? error.message : "Unknown error",
     });
   }
 });
 
 // List all workflows endpoint
-app.get('/workflows', async (_req: Request, res: Response) => {
+app.get("/workflows", async (_req: Request, res: Response) => {
   try {
     const definitions = await database.getAllWorkflowDefinitions();
 
@@ -143,47 +151,50 @@ app.get('/workflows', async (_req: Request, res: Response) => {
       })),
     });
   } catch (error) {
-    logger.error({ error }, 'Failed to list workflows');
+    logger.error({ error }, "Failed to list workflows");
     res.status(500).json({
-      error: 'Failed to list workflows',
-      message: error instanceof Error ? error.message : 'Unknown error',
+      error: "Failed to list workflows",
+      message: error instanceof Error ? error.message : "Unknown error",
     });
   }
 });
 
 // Delete workflow endpoint
-app.delete('/workflows/:id', async (req: Request, res: Response) => {
+app.delete("/workflows/:id", async (req: Request, res: Response) => {
   try {
     const id = getSingleParam(req.params.id);
 
     if (!id) {
       return res.status(400).json({
-        error: 'Invalid workflow ID',
+        error: "Invalid workflow ID",
       });
     }
 
     await database.deleteWorkflowDefinition(id);
 
-    logger.info({ workflow_id: id }, 'Workflow deleted');
+    logger.info({ workflow_id: id }, "Workflow deleted");
 
     res.status(200).json({
-      status: 'deleted',
+      status: "deleted",
       workflow_id: id,
     });
   } catch (error) {
-    logger.error({ error, workflow_id: req.params.id }, 'Failed to delete workflow');
+    logger.error(
+      { error, workflow_id: req.params.id },
+      "Failed to delete workflow",
+    );
     res.status(500).json({
-      error: 'Failed to delete workflow',
-      message: error instanceof Error ? error.message : 'Unknown error',
+      error: "Failed to delete workflow",
+      message: error instanceof Error ? error.message : "Unknown error",
     });
   }
 });
 
 // Error handling middleware
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  logger.error({ err }, 'Unhandled error in HTTP server');
+  logger.error({ err }, "Unhandled error in HTTP server");
   res.status(500).json({
-    error: 'Internal server error',
+    error: "Internal server error",
     message: err.message,
   });
 });
@@ -192,7 +203,7 @@ export function startServer(): void {
   app.listen(config.http.port, config.http.host, () => {
     logger.info(
       { host: config.http.host, port: config.http.port },
-      'HTTP server started - ready to accept workflow registrations'
+      "HTTP server started - ready to accept workflow registrations",
     );
   });
 }

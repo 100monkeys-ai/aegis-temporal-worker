@@ -3,11 +3,11 @@
  * Manages workflow definition persistence for multi-worker coordination
  */
 
-import pkg from 'pg';
+import pkg from "pg";
 const { Pool } = pkg;
-import { config } from './config.js';
-import { logger } from './logger.js';
-import type { TemporalWorkflowDefinition } from './types.js';
+import { config } from "./config.js";
+import { logger } from "./logger.js";
+import type { TemporalWorkflowDefinition } from "./types.js";
 
 export class Database {
   private pool: pkg.Pool;
@@ -20,33 +20,35 @@ export class Database {
       connectionTimeoutMillis: 10000,
     });
 
-    this.pool.on('error', (err) => {
-      logger.error({ err }, 'Unexpected database error');
+    this.pool.on("error", (err) => {
+      logger.error({ err }, "Unexpected database error");
     });
   }
 
   async connect(): Promise<void> {
     try {
       const client = await this.pool.connect();
-      await client.query('SELECT NOW()');
+      await client.query("SELECT NOW()");
       client.release();
-      logger.info('Database connected successfully');
+      logger.info("Database connected successfully");
     } catch (error) {
-      logger.error({ error }, 'Failed to connect to database');
+      logger.error({ error }, "Failed to connect to database");
       throw error;
     }
   }
 
   async disconnect(): Promise<void> {
     await this.pool.end();
-    logger.info('Database connection closed');
+    logger.info("Database connection closed");
   }
 
   /**
    * Save workflow definition to database
    * Used for multi-worker coordination (all workers can load all definitions)
    */
-  async saveWorkflowDefinition(definition: TemporalWorkflowDefinition): Promise<void> {
+  async saveWorkflowDefinition(
+    definition: TemporalWorkflowDefinition,
+  ): Promise<void> {
     const query = `
       INSERT INTO workflow_definitions (
         workflow_id,
@@ -54,18 +56,16 @@ export class Database {
         name,
         version,
         scope,
-        owner_user_id,
         definition,
         registered_at,
         definition_hash
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)
       ON CONFLICT (workflow_id)
       DO UPDATE SET
         name = EXCLUDED.name,
         version = EXCLUDED.version,
         scope = EXCLUDED.scope,
-        owner_user_id = EXCLUDED.owner_user_id,
         definition = EXCLUDED.definition,
         registered_at = NOW(),
         definition_hash = EXCLUDED.definition_hash
@@ -79,8 +79,7 @@ export class Database {
         definition.tenant_id,
         definition.name,
         definition.version,
-        definition.scope || 'tenant',
-        definition.owner_user_id || null,
+        definition.scope || "tenant",
         JSON.stringify(definition),
         definitionHash,
       ]);
@@ -91,7 +90,7 @@ export class Database {
           name: definition.name,
           version: definition.version,
         },
-        'Workflow definition saved to database'
+        "Workflow definition saved to database",
       );
     } catch (error) {
       logger.error(
@@ -102,7 +101,7 @@ export class Database {
           name: definition.name,
           version: definition.version,
         },
-        'Failed to save workflow definition'
+        "Failed to save workflow definition",
       );
       throw error;
     }
@@ -111,8 +110,11 @@ export class Database {
   /**
    * Load workflow definition by ID
    */
-  async getWorkflowDefinition(workflowId: string): Promise<TemporalWorkflowDefinition | null> {
-    const query = 'SELECT definition FROM workflow_definitions WHERE workflow_id = $1';
+  async getWorkflowDefinition(
+    workflowId: string,
+  ): Promise<TemporalWorkflowDefinition | null> {
+    const query =
+      "SELECT definition FROM workflow_definitions WHERE workflow_id = $1";
 
     try {
       const result = await this.pool.query(query, [workflowId]);
@@ -121,7 +123,10 @@ export class Database {
       }
       return result.rows[0].definition as TemporalWorkflowDefinition;
     } catch (error) {
-      logger.error({ error, workflow_id: workflowId }, 'Failed to load workflow definition');
+      logger.error(
+        { error, workflow_id: workflowId },
+        "Failed to load workflow definition",
+      );
       throw error;
     }
   }
@@ -131,13 +136,16 @@ export class Database {
    * Called on worker startup to register all workflows
    */
   async getAllWorkflowDefinitions(): Promise<TemporalWorkflowDefinition[]> {
-    const query = 'SELECT definition FROM workflow_definitions ORDER BY registered_at DESC';
+    const query =
+      "SELECT definition FROM workflow_definitions ORDER BY registered_at DESC";
 
     try {
       const result = await this.pool.query(query);
-      return result.rows.map((row) => row.definition as TemporalWorkflowDefinition);
+      return result.rows.map(
+        (row) => row.definition as TemporalWorkflowDefinition,
+      );
     } catch (error) {
-      logger.error({ error }, 'Failed to load all workflow definitions');
+      logger.error({ error }, "Failed to load all workflow definitions");
       throw error;
     }
   }
@@ -146,13 +154,16 @@ export class Database {
    * Delete workflow definition
    */
   async deleteWorkflowDefinition(workflowId: string): Promise<void> {
-    const query = 'DELETE FROM workflow_definitions WHERE workflow_id = $1';
+    const query = "DELETE FROM workflow_definitions WHERE workflow_id = $1";
 
     try {
       await this.pool.query(query, [workflowId]);
-      logger.info({ workflow_id: workflowId }, 'Workflow definition deleted');
+      logger.info({ workflow_id: workflowId }, "Workflow definition deleted");
     } catch (error) {
-      logger.error({ error, workflow_id: workflowId }, 'Failed to delete workflow definition');
+      logger.error(
+        { error, workflow_id: workflowId },
+        "Failed to delete workflow definition",
+      );
       throw error;
     }
   }

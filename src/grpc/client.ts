@@ -3,12 +3,12 @@
  * Calls back to Rust ExecutionService, ValidationService, CortexService
  */
 
-import * as grpc from '@grpc/grpc-js';
-import * as protoLoader from '@grpc/proto-loader';
-import { config } from '../config.js';
-import { logger } from '../logger.js';
-import { getServiceToken } from '../auth/token-manager.js';
-import type { 
+import * as grpc from "@grpc/grpc-js";
+import * as protoLoader from "@grpc/proto-loader";
+import { config } from "../config.js";
+import { logger } from "../logger.js";
+import { getServiceToken } from "../auth/token-manager.js";
+import type {
   ExecuteAgentRequest,
   ExecutionEvent,
   ExecuteSystemCommandRequest,
@@ -23,12 +23,13 @@ import type {
   StoreTrajectoryPatternResponse,
   ExecuteContainerRunRequest,
   ExecuteContainerRunResponse,
-} from '../types.js';
+} from "../types.js";
 
 // Load protobuf definition
 // In Docker: /app/aegis-proto/proto/aegis_runtime.proto
 // In development (from repo root): ./aegis-proto/proto/aegis_runtime.proto
-const PROTO_PATH = process.env.PROTO_PATH || './aegis-proto/proto/aegis_runtime.proto';
+const PROTO_PATH =
+  process.env.PROTO_PATH || "./aegis-proto/proto/aegis_runtime.proto";
 
 const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
   keepCase: true,
@@ -40,20 +41,20 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
 
 const aegisProto = grpc.loadPackageDefinition(packageDefinition) as any;
 
-const TERMINAL_EVENT_TYPES = new Set<ExecutionEvent['event_type']>([
-  'ExecutionCompleted',
-  'ExecutionFailed',
+const TERMINAL_EVENT_TYPES = new Set<ExecutionEvent["event_type"]>([
+  "ExecutionCompleted",
+  "ExecutionFailed",
 ]);
 
-const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 const EXECUTION_FALLBACK_IDLE_MS = Number.parseInt(
-  process.env.AEGIS_EXECUTION_FALLBACK_IDLE_MS ?? '5000',
+  process.env.AEGIS_EXECUTION_FALLBACK_IDLE_MS ?? "5000",
   10,
 );
 
 const EXECUTION_FALLBACK_POLL_MS = Number.parseInt(
-  process.env.AEGIS_EXECUTION_FALLBACK_POLL_MS ?? '1000',
+  process.env.AEGIS_EXECUTION_FALLBACK_POLL_MS ?? "1000",
   10,
 );
 
@@ -64,7 +65,7 @@ interface PersistedExecutionStatusResponse {
 
 function executionStatusUrl(executionId: string): string {
   const orchestratorUrl =
-    process.env.AEGIS_ORCHESTRATOR_URL || 'http://localhost:8088';
+    process.env.AEGIS_ORCHESTRATOR_URL || "http://localhost:8088";
   return `${orchestratorUrl}/v1/executions/${encodeURIComponent(executionId)}`;
 }
 
@@ -128,32 +129,32 @@ function synthesizeTerminalEvent(
   const totalIterations = highestIteration(events);
 
   switch (status) {
-    case 'completed':
+    case "completed":
       return {
-        event_type: 'ExecutionCompleted',
+        event_type: "ExecutionCompleted",
         execution_id: executionId,
         timestamp,
         final_output: latestKnownOutput(events),
         total_iterations: totalIterations,
       };
-    case 'failed':
+    case "failed":
       return {
-        event_type: 'ExecutionFailed',
+        event_type: "ExecutionFailed",
         execution_id: executionId,
         timestamp,
         reason:
           latestFailureReason(events) ??
-          'Execution reached persisted failed state',
+          "Execution reached persisted failed state",
         total_iterations: totalIterations,
       };
-    case 'cancelled':
+    case "cancelled":
       return {
-        event_type: 'ExecutionFailed',
+        event_type: "ExecutionFailed",
         execution_id: executionId,
         timestamp,
         reason:
           latestFailureReason(events) ??
-          'Execution reached persisted cancelled state',
+          "Execution reached persisted cancelled state",
         total_iterations: totalIterations,
       };
     default:
@@ -169,9 +170,9 @@ class AegisRuntimeClient {
     // Package name is aegis.runtime.v1
     this.client = new aegisProto.aegis.runtime.v1.AegisRuntime(
       serverAddress,
-      grpc.credentials.createInsecure()
+      grpc.credentials.createInsecure(),
     );
-    logger.info({ server_address: serverAddress }, 'gRPC client initialized');
+    logger.info({ server_address: serverAddress }, "gRPC client initialized");
   }
 
   /**
@@ -180,7 +181,7 @@ class AegisRuntimeClient {
   async executeAgent(request: ExecuteAgentRequest): Promise<ExecutionEvent[]> {
     const token = await getServiceToken();
     const metadata = new grpc.Metadata();
-    metadata.add('authorization', `Bearer ${token}`);
+    metadata.add("authorization", `Bearer ${token}`);
 
     return new Promise((resolve, reject) => {
       const events: ExecutionEvent[] = [];
@@ -201,15 +202,15 @@ class AegisRuntimeClient {
           clearTimeout(pollTimer);
           pollTimer = undefined;
         }
-        call.removeAllListeners('data');
-        call.removeAllListeners('end');
-        call.removeAllListeners('error');
+        call.removeAllListeners("data");
+        call.removeAllListeners("end");
+        call.removeAllListeners("error");
       };
 
       const settleWithEvents = (
         resolvedEvents: ExecutionEvent[],
         logMessage: string,
-        logLevel: 'info' | 'error' = 'info',
+        logLevel: "info" | "error" = "info",
       ) => {
         if (settled) {
           return;
@@ -238,7 +239,7 @@ class AegisRuntimeClient {
 
         idleTimer = setTimeout(() => {
           idleTimer = undefined;
-          void probePersistedTerminalState('idle_timeout');
+          void probePersistedTerminalState("idle_timeout");
         }, EXECUTION_FALLBACK_IDLE_MS);
       };
 
@@ -249,7 +250,7 @@ class AegisRuntimeClient {
 
         pollTimer = setTimeout(() => {
           pollTimer = undefined;
-          void probePersistedTerminalState('poll_retry');
+          void probePersistedTerminalState("poll_retry");
         }, EXECUTION_FALLBACK_POLL_MS);
       };
 
@@ -273,10 +274,10 @@ class AegisRuntimeClient {
               events.push(synthesizedEvent);
               settleWithEvents(
                 events,
-                'Agent execution resolved from persisted terminal state',
-                synthesizedEvent.event_type === 'ExecutionFailed'
-                  ? 'error'
-                  : 'info',
+                "Agent execution resolved from persisted terminal state",
+                synthesizedEvent.event_type === "ExecutionFailed"
+                  ? "error"
+                  : "info",
               );
               return;
             }
@@ -284,13 +285,13 @@ class AegisRuntimeClient {
 
           logger.debug(
             { execution_id: executionId, status, trigger },
-            'Persisted execution state not terminal yet',
+            "Persisted execution state not terminal yet",
           );
           scheduleNextPoll();
         } catch (error) {
           logger.warn(
             { error, execution_id: executionId, trigger },
-            'Failed to fetch persisted execution status',
+            "Failed to fetch persisted execution status",
           );
           scheduleNextPoll();
         } finally {
@@ -298,24 +299,29 @@ class AegisRuntimeClient {
         }
       };
 
-      call.on('data', (rawEvent: any) => {
+      call.on("data", (rawEvent: any) => {
         // The proto uses `oneof event` which @grpc/proto-loader decodes as:
         // { event: 'execution_completed', execution_completed: { ... } }
         // Map it to the flat ExecutionEvent interface expected by activities.
-        const eventCase: string = rawEvent.event ?? '';
+        const eventCase: string = rawEvent.event ?? "";
         const inner: any = rawEvent[eventCase] ?? {};
 
         // Convert snake_case oneof case name to PascalCase event_type
         // e.g. 'execution_completed' → 'ExecutionCompleted'
         const eventType = eventCase
-          .split('_')
+          .split("_")
           .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
-          .join('') as ExecutionEvent['event_type'];
+          .join("") as ExecutionEvent["event_type"];
 
         const event: ExecutionEvent = {
           event_type: eventType,
-          execution_id: inner.execution_id ?? '',
-          timestamp: inner.started_at ?? inner.completed_at ?? inner.failed_at ?? inner.applied_at ?? new Date().toISOString(),
+          execution_id: inner.execution_id ?? "",
+          timestamp:
+            inner.started_at ??
+            inner.completed_at ??
+            inner.failed_at ??
+            inner.applied_at ??
+            new Date().toISOString(),
           iteration_number: inner.iteration_number,
           action: inner.action,
           output: inner.output,
@@ -326,7 +332,10 @@ class AegisRuntimeClient {
           total_iterations: inner.total_iterations,
         };
 
-        logger.debug({ event_type: event.event_type }, 'Received execution event');
+        logger.debug(
+          { event_type: event.event_type },
+          "Received execution event",
+        );
         events.push(event);
         if (event.execution_id) {
           executionId = event.execution_id;
@@ -335,10 +344,10 @@ class AegisRuntimeClient {
         if (TERMINAL_EVENT_TYPES.has(event.event_type)) {
           settleWithEvents(
             events,
-            event.event_type === 'ExecutionFailed'
-              ? 'Agent execution failed'
-              : 'Agent execution reached terminal event',
-            event.event_type === 'ExecutionFailed' ? 'error' : 'info',
+            event.event_type === "ExecutionFailed"
+              ? "Agent execution failed"
+              : "Agent execution reached terminal event",
+            event.event_type === "ExecutionFailed" ? "error" : "info",
           );
           return;
         }
@@ -350,14 +359,14 @@ class AegisRuntimeClient {
         scheduleFallbackProbe();
       });
 
-      call.on('end', () => {
+      call.on("end", () => {
         if (settled) {
           return;
         }
-        void probePersistedTerminalState('stream_end');
+        void probePersistedTerminalState("stream_end");
       });
 
-      call.on('error', (error: Error) => {
+      call.on("error", (error: Error) => {
         if (settled) {
           return;
         }
@@ -365,16 +374,16 @@ class AegisRuntimeClient {
         if (executionId) {
           logger.warn(
             { error, execution_id: executionId },
-            'Agent execution stream errored before terminal event; checking persisted status',
+            "Agent execution stream errored before terminal event; checking persisted status",
           );
-          void probePersistedTerminalState('stream_error').finally(() => {
+          void probePersistedTerminalState("stream_error").finally(() => {
             if (settled) {
               return;
             }
 
             settled = true;
             cleanup();
-            logger.error({ error }, 'Agent execution failed');
+            logger.error({ error }, "Agent execution failed");
             reject(error);
           });
           return;
@@ -382,7 +391,7 @@ class AegisRuntimeClient {
 
         settled = true;
         cleanup();
-        logger.error({ error }, 'Agent execution failed');
+        logger.error({ error }, "Agent execution failed");
         reject(error);
       });
     });
@@ -391,105 +400,161 @@ class AegisRuntimeClient {
   /**
    * Execute a system command
    */
-  async executeSystemCommand(request: ExecuteSystemCommandRequest): Promise<ExecuteSystemCommandResponse> {
+  async executeSystemCommand(
+    request: ExecuteSystemCommandRequest,
+  ): Promise<ExecuteSystemCommandResponse> {
     return new Promise((resolve, reject) => {
-      this.client.ExecuteSystemCommand(request, (error: Error | null, response: ExecuteSystemCommandResponse) => {
-        if (error) {
-          logger.error({ error }, 'System command execution failed');
-          reject(error);
-        } else {
-          logger.info({ exit_code: response.exit_code }, 'System command completed');
-          resolve(response);
-        }
-      });
+      this.client.ExecuteSystemCommand(
+        request,
+        (error: Error | null, response: ExecuteSystemCommandResponse) => {
+          if (error) {
+            logger.error({ error }, "System command execution failed");
+            reject(error);
+          } else {
+            logger.info(
+              { exit_code: response.exit_code },
+              "System command completed",
+            );
+            resolve(response);
+          }
+        },
+      );
     });
   }
 
   /**
    * Validate output with judge agents
    */
-  async validateWithJudges(request: ValidateRequest): Promise<ValidateResponse> {
+  async validateWithJudges(
+    request: ValidateRequest,
+  ): Promise<ValidateResponse> {
     return new Promise((resolve, reject) => {
-      this.client.ValidateWithJudges(request, (error: Error | null, response: ValidateResponse) => {
-        if (error) {
-          logger.error({ error }, 'Validation with judges failed');
-          reject(error);
-        } else {
-          logger.info({ score: response.score, confidence: response.confidence, binary_valid: response.binary_valid }, 'Validation completed');
-          resolve(response);
-        }
-      });
+      this.client.ValidateWithJudges(
+        request,
+        (error: Error | null, response: ValidateResponse) => {
+          if (error) {
+            logger.error({ error }, "Validation with judges failed");
+            reject(error);
+          } else {
+            logger.info(
+              {
+                score: response.score,
+                confidence: response.confidence,
+                binary_valid: response.binary_valid,
+              },
+              "Validation completed",
+            );
+            resolve(response);
+          }
+        },
+      );
     });
   }
 
   /**
    * Query Cortex for patterns matching an error
    */
-  async queryCortexPatterns(request: QueryCortexRequest): Promise<QueryCortexResponse> {
+  async queryCortexPatterns(
+    request: QueryCortexRequest,
+  ): Promise<QueryCortexResponse> {
     return new Promise((resolve, reject) => {
-      this.client.QueryCortexPatterns(request, (error: Error | null, response: QueryCortexResponse) => {
-        if (error) {
-          logger.error({ error }, 'Cortex pattern query failed');
-          reject(error);
-        } else {
-          logger.info({ pattern_count: response.patterns.length }, 'Cortex patterns retrieved');
-          resolve(response);
-        }
-      });
+      this.client.QueryCortexPatterns(
+        request,
+        (error: Error | null, response: QueryCortexResponse) => {
+          if (error) {
+            logger.error({ error }, "Cortex pattern query failed");
+            reject(error);
+          } else {
+            logger.info(
+              { pattern_count: response.patterns.length },
+              "Cortex patterns retrieved",
+            );
+            resolve(response);
+          }
+        },
+      );
     });
   }
 
   /**
    * Store a new pattern in Cortex
    */
-  async storeCortexPattern(request: StoreCortexPatternRequest): Promise<StoreCortexPatternResponse> {
+  async storeCortexPattern(
+    request: StoreCortexPatternRequest,
+  ): Promise<StoreCortexPatternResponse> {
     return new Promise((resolve, reject) => {
-      this.client.StoreCortexPattern(request, (error: Error | null, response: StoreCortexPatternResponse) => {
-        if (error) {
-          logger.error({ error }, 'Cortex pattern storage failed');
-          reject(error);
-        } else {
-          logger.info({ pattern_id: response.pattern_id }, 'Cortex pattern stored');
-          resolve(response);
-        }
-      });
+      this.client.StoreCortexPattern(
+        request,
+        (error: Error | null, response: StoreCortexPatternResponse) => {
+          if (error) {
+            logger.error({ error }, "Cortex pattern storage failed");
+            reject(error);
+          } else {
+            logger.info(
+              { pattern_id: response.pattern_id },
+              "Cortex pattern stored",
+            );
+            resolve(response);
+          }
+        },
+      );
     });
   }
 
   /**
    * Store a trajectory pattern in Cortex (ADR-049 Pillar 2)
    */
-  async storeTrajectoryPattern(request: StoreTrajectoryPatternRequest): Promise<StoreTrajectoryPatternResponse> {
+  async storeTrajectoryPattern(
+    request: StoreTrajectoryPatternRequest,
+  ): Promise<StoreTrajectoryPatternResponse> {
     return new Promise((resolve, reject) => {
-      this.client.StoreTrajectoryPattern(request, (error: Error | null, response: StoreTrajectoryPatternResponse) => {
-        if (error) {
-          logger.error({ error }, 'Trajectory pattern storage failed');
-          reject(error);
-        } else {
-          logger.info({ new_weight: response.new_weight }, 'Trajectory pattern stored');
-          resolve(response);
-        }
-      });
+      this.client.StoreTrajectoryPattern(
+        request,
+        (error: Error | null, response: StoreTrajectoryPatternResponse) => {
+          if (error) {
+            logger.error({ error }, "Trajectory pattern storage failed");
+            reject(error);
+          } else {
+            logger.info(
+              { new_weight: response.new_weight },
+              "Trajectory pattern stored",
+            );
+            resolve(response);
+          }
+        },
+      );
     });
   }
 
   /**
    * Execute a deterministic container step without an LLM loop (ADR-050)
    */
-  async executeContainerRun(request: ExecuteContainerRunRequest): Promise<ExecuteContainerRunResponse> {
+  async executeContainerRun(
+    request: ExecuteContainerRunRequest,
+  ): Promise<ExecuteContainerRunResponse> {
     return new Promise((resolve, reject) => {
-      this.client.ExecuteContainerRun(request, (error: Error | null, response: ExecuteContainerRunResponse) => {
-        if (error) {
-          logger.error({ error, state_name: request.state_name }, 'Container run execution failed');
-          reject(error);
-        } else {
-          logger.info(
-            { exit_code: response.exit_code, attempts: response.attempts, state_name: request.state_name },
-            'Container run completed'
-          );
-          resolve(response);
-        }
-      });
+      this.client.ExecuteContainerRun(
+        request,
+        (error: Error | null, response: ExecuteContainerRunResponse) => {
+          if (error) {
+            logger.error(
+              { error, state_name: request.state_name },
+              "Container run execution failed",
+            );
+            reject(error);
+          } else {
+            logger.info(
+              {
+                exit_code: response.exit_code,
+                attempts: response.attempts,
+                state_name: request.state_name,
+              },
+              "Container run completed",
+            );
+            resolve(response);
+          }
+        },
+      );
     });
   }
 
@@ -497,48 +562,71 @@ class AegisRuntimeClient {
    * Create an ephemeral workspace volume on the runtime (ADR-087)
    */
   async createWorkspaceVolume(request: {
-    workflow_execution_id: string
-    tenant_id: string
-    ttl_hours: number
-    size_limit_mb: number
+    workflow_execution_id: string;
+    tenant_id: string;
+    ttl_hours: number;
+    size_limit_mb: number;
   }): Promise<{ volume_id: string; remote_path: string }> {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
-    meta.add('authorization', `Bearer ${token}`);
+    meta.add("authorization", `Bearer ${token}`);
     return new Promise((resolve, reject) => {
-      this.client.CreateWorkspaceVolume(request, meta, (error: Error | null, response: any) => {
-        if (error) {
-          logger.error({ error, workflow_execution_id: request.workflow_execution_id }, 'Workspace volume creation failed')
-          reject(error)
-        } else {
-          logger.info({ volume_id: response.volume_id }, 'Workspace volume created')
-          resolve({ volume_id: response.volume_id, remote_path: response.remote_path })
-        }
-      })
-    })
+      this.client.CreateWorkspaceVolume(
+        request,
+        meta,
+        (error: Error | null, response: any) => {
+          if (error) {
+            logger.error(
+              { error, workflow_execution_id: request.workflow_execution_id },
+              "Workspace volume creation failed",
+            );
+            reject(error);
+          } else {
+            logger.info(
+              { volume_id: response.volume_id },
+              "Workspace volume created",
+            );
+            resolve({
+              volume_id: response.volume_id,
+              remote_path: response.remote_path,
+            });
+          }
+        },
+      );
+    });
   }
 
   /**
    * Destroy a workspace volume on the runtime (ADR-087)
    */
   async destroyWorkspaceVolume(request: {
-    volume_id: string
-    workflow_execution_id: string
+    volume_id: string;
+    workflow_execution_id: string;
   }): Promise<void> {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
-    meta.add('authorization', `Bearer ${token}`);
+    meta.add("authorization", `Bearer ${token}`);
     return new Promise((resolve, reject) => {
-      this.client.DestroyWorkspaceVolume(request, meta, (error: Error | null, response: any) => {
-        if (error) {
-          logger.error({ error, volume_id: request.volume_id }, 'Workspace volume destruction failed')
-          reject(error)
-        } else {
-          logger.info({ volume_id: request.volume_id }, 'Workspace volume destroyed')
-          resolve()
-        }
-      })
-    })
+      this.client.DestroyWorkspaceVolume(
+        request,
+        meta,
+        (error: Error | null, response: any) => {
+          if (error) {
+            logger.error(
+              { error, volume_id: request.volume_id },
+              "Workspace volume destruction failed",
+            );
+            reject(error);
+          } else {
+            logger.info(
+              { volume_id: request.volume_id },
+              "Workspace volume destroyed",
+            );
+            resolve();
+          }
+        },
+      );
+    });
   }
 
   /**
@@ -546,12 +634,14 @@ class AegisRuntimeClient {
    */
   close(): void {
     this.client.close();
-    logger.info('gRPC client closed');
+    logger.info("gRPC client closed");
   }
 }
 
 // Singleton instance
-export const aegisRuntimeClient = new AegisRuntimeClient(config.grpc.runtimeUrl);
+export const aegisRuntimeClient = new AegisRuntimeClient(
+  config.grpc.runtimeUrl,
+);
 
 // Export for testing
 export { AegisRuntimeClient };

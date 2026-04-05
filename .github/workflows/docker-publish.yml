@@ -3,9 +3,9 @@ name: Docker Publish
 on:
   push:
     branches:
-      - main       # Publishes :latest
+      - main # Publishes :latest
     tags:
-      - '*.*.*'   # Publishes semver tag (e.g. 0.2.0) + re-tags as :latest
+      - "*.*.*" # Publishes semver tag (e.g. 0.2.0) + re-tags as :latest
 
 env:
   REGISTRY: ghcr.io

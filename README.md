@@ -12,23 +12,23 @@ The AEGIS Temporal Worker is the **infrastructure layer** of the Workflow Orches
 
 ```markdown
 AEGIS YAML Manifest
-       │
-       ▼  (Rust TemporalWorkflowMapper — Anti-Corruption Layer)
+│
+▼ (Rust TemporalWorkflowMapper — Anti-Corruption Layer)
 TemporalWorkflowDefinition (JSON)
-       │  HTTP POST /register-workflow
-       ▼
+│ HTTP POST /register-workflow
+▼
 ┌──────────────────────────────────────────────┐
-│          aegis-temporal-worker (this repo)   │
-│                                              │
-│  HTTP Server :3000 (workflow registration)   │
-│  Temporal Worker (aegis-agents task queue)   │
-│       │                                      │
-│       ├── Activities ─gRPC──► Rust           │
-│       │                       AegisRuntime   │
-│       │                       :50051         │
-│       └── Events    ─HTTP──► Rust            │
-│                               /v1/temporal-  │
-│                               events         │
+│ aegis-temporal-worker (this repo) │
+│ │
+│ HTTP Server :3000 (workflow registration) │
+│ Temporal Worker (aegis-agents task queue) │
+│ │ │
+│ ├── Activities ─gRPC──► Rust │
+│ │ AegisRuntime │
+│ │ :50051 │
+│ └── Events ─HTTP──► Rust │
+│ /v1/temporal- │
+│ events │
 └──────────────────────────────────────────────┘
 ```
 
@@ -52,12 +52,12 @@ Images are published automatically on every push to `main` (`latest`) and on ver
 
 ### Prerequisites
 
-| Dependency | Version |
-| ----------- | --------- |
-| Node.js | ≥ 20 |
-| npm | ≥ 9 |
-| PostgreSQL | ≥ 15 |
-| Temporal Server | ≥ 1.22 |
+| Dependency                | Version        |
+| ------------------------- | -------------- |
+| Node.js                   | ≥ 20           |
+| npm                       | ≥ 9            |
+| PostgreSQL                | ≥ 15           |
+| Temporal Server           | ≥ 1.22         |
 | AEGIS Runtime (Rust gRPC) | current `main` |
 
 The easiest way to run all dependencies locally is the [aegis-examples](https://github.com/100monkeys-ai/aegis-examples) Docker Compose stack.
@@ -80,18 +80,18 @@ npm run dev:all
 
 All configuration is via environment variables. See [`.env.example`](.env.example) for the full reference.
 
-| Variable | Default | Description |
-| ---------- | --------- | ------------- |
-| `TEMPORAL_ADDRESS` | `localhost:7233` | Temporal server gRPC address |
-| `TEMPORAL_NAMESPACE` | `default` | Temporal namespace |
-| `TEMPORAL_TASK_QUEUE` | `aegis-agents` | Worker task queue name |
-| `DATABASE_URL` | *(required)* | PostgreSQL connection string |
-| `AEGIS_RUNTIME_GRPC_URL` | `localhost:50051` | Rust AegisRuntime gRPC address |
-| `AEGIS_ORCHESTRATOR_URL` | `http://localhost:8088` | Rust orchestrator HTTP (for event callbacks) |
-| `HTTP_PORT` | `3000` | Worker HTTP API port |
-| `PROTO_PATH` | `./aegis-proto/proto/aegis_runtime.proto` | Path to gRPC proto file |
-| `LOG_LEVEL` | `info` | Pino log level (`trace`/`debug`/`info`/`warn`/`error`) |
-| `NODE_ENV` | `development` | Environment (`development`/`production`) |
+| Variable                 | Default                                   | Description                                            |
+| ------------------------ | ----------------------------------------- | ------------------------------------------------------ |
+| `TEMPORAL_ADDRESS`       | `localhost:7233`                          | Temporal server gRPC address                           |
+| `TEMPORAL_NAMESPACE`     | `default`                                 | Temporal namespace                                     |
+| `TEMPORAL_TASK_QUEUE`    | `aegis-agents`                            | Worker task queue name                                 |
+| `DATABASE_URL`           | _(required)_                              | PostgreSQL connection string                           |
+| `AEGIS_RUNTIME_GRPC_URL` | `localhost:50051`                         | Rust AegisRuntime gRPC address                         |
+| `AEGIS_ORCHESTRATOR_URL` | `http://localhost:8088`                   | Rust orchestrator HTTP (for event callbacks)           |
+| `HTTP_PORT`              | `3000`                                    | Worker HTTP API port                                   |
+| `PROTO_PATH`             | `./aegis-proto/proto/aegis_runtime.proto` | Path to gRPC proto file                                |
+| `LOG_LEVEL`              | `info`                                    | Pino log level (`trace`/`debug`/`info`/`warn`/`error`) |
+| `NODE_ENV`               | `development`                             | Environment (`development`/`production`)               |
 
 ### Production (Docker Compose)
 
@@ -153,28 +153,28 @@ Health check. Returns `{ "status": "healthy", "timestamp": "..." }`.
 
 ```markdown
 aegis-temporal-worker/
-├── aegis-proto/               # git submodule: github.com/100monkeys-ai/aegis-proto
-│   └── proto/
-│       └── aegis_runtime.proto  # gRPC service definition
+├── aegis-proto/ # git submodule: github.com/100monkeys-ai/aegis-proto
+│ └── proto/
+│ └── aegis_runtime.proto # gRPC service definition
 ├── src/
-│   ├── index.ts                   # Main entry: starts HTTP server + Temporal worker
-│   ├── config.ts                  # Zod-validated environment configuration
-│   ├── logger.ts                  # Pino structured logger
-│   ├── types.ts                   # TypeScript type definitions
-│   ├── database.ts                # PostgreSQL client
-│   ├── server.ts                  # Express HTTP server (workflow registration API)
-│   ├── worker.ts                  # Temporal worker initialization
-│   ├── workflow-registry.ts       # In-memory workflow function registry
-│   ├── workflow-generator.ts      # Generates Temporal workflow functions from definitions
-│   ├── activities/
-│   │   ├── index.ts               # All activities (executeAgent, validateOutput, etc.)
-│   │   ├── event-activities.ts    # publishEventActivity (HTTP → Rust /v1/temporal-events)
-│   │   └── workflow-activities.ts # fetchWorkflowDefinition (DB lookup)
-│   ├── grpc/
-│   │   └── client.ts              # gRPC client for AegisRuntime service
-│   └── workflows/
-│       ├── index.ts               # Workflow exports
-│       └── aegis-workflow.ts      # Generic Interpreter Workflow (core FSM executor)
+│ ├── index.ts # Main entry: starts HTTP server + Temporal worker
+│ ├── config.ts # Zod-validated environment configuration
+│ ├── logger.ts # Pino structured logger
+│ ├── types.ts # TypeScript type definitions
+│ ├── database.ts # PostgreSQL client
+│ ├── server.ts # Express HTTP server (workflow registration API)
+│ ├── worker.ts # Temporal worker initialization
+│ ├── workflow-registry.ts # In-memory workflow function registry
+│ ├── workflow-generator.ts # Generates Temporal workflow functions from definitions
+│ ├── activities/
+│ │ ├── index.ts # All activities (executeAgent, validateOutput, etc.)
+│ │ ├── event-activities.ts # publishEventActivity (HTTP → Rust /v1/temporal-events)
+│ │ └── workflow-activities.ts # fetchWorkflowDefinition (DB lookup)
+│ ├── grpc/
+│ │ └── client.ts # gRPC client for AegisRuntime service
+│ └── workflows/
+│ ├── index.ts # Workflow exports
+│ └── aegis-workflow.ts # Generic Interpreter Workflow (core FSM executor)
 ├── Dockerfile
 ├── .env.example
 └── package.json

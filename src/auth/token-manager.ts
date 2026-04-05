@@ -3,8 +3,8 @@
  * Implements OAuth2 client credentials flow with caching.
  */
 
-import { config } from '../config.js';
-import { logger } from '../logger.js';
+import { config } from "../config.js";
+import { logger } from "../logger.js";
 
 interface TokenResponse {
   access_token: string;
@@ -24,24 +24,27 @@ export async function getServiceToken(): Promise<string> {
   const now = Date.now();
 
   if (cachedToken !== null && now < tokenExpiresAt) {
-    logger.debug('Returning cached service account token');
+    logger.debug("Returning cached service account token");
     return cachedToken;
   }
 
   const { keycloakHost, realm, clientId, clientSecret } = config.serviceAccount;
   const tokenUrl = `${keycloakHost}/realms/${realm}/protocol/openid-connect/token`;
 
-  logger.info({ token_url: tokenUrl, client_id: clientId }, 'Fetching service account token from Keycloak');
+  logger.info(
+    { token_url: tokenUrl, client_id: clientId },
+    "Fetching service account token from Keycloak",
+  );
 
   const body = new URLSearchParams({
-    grant_type: 'client_credentials',
+    grant_type: "client_credentials",
     client_id: clientId,
     client_secret: clientSecret,
   });
 
   const response = await fetch(tokenUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
   });
 
@@ -60,7 +63,7 @@ export async function getServiceToken(): Promise<string> {
 
   logger.debug(
     { expires_in: data.expires_in, client_id: clientId },
-    'Service account token refreshed',
+    "Service account token refreshed",
   );
 
   return cachedToken;

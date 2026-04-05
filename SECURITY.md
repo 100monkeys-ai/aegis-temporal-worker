@@ -43,7 +43,7 @@ We use `npm audit` in CI to detect known vulnerabilities. Pin dependency version
 ## Supported Versions
 
 | Version            | Supported |
-|--------------------|-----------|
+| ------------------ | --------- |
 | `main` branch      | ✅        |
 | All older releases | ❌        |
 
