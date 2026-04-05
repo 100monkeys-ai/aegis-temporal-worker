@@ -1,15 +1,15 @@
 /**
  * Temporal Workflows
- * 
+ *
  * We export the Generic Interpreter Workflow which handles all
  * AEGIS workflow definitions dynamically.
  */
 
-import { aegis_workflow } from './aegis-workflow.js';
+import { aegis_workflow } from "./aegis-workflow.js";
 
 // Export with the specific name that the Rust client invokes
 const workflows = {
-  'aegis-workflow': aegis_workflow,
+  "aegis-workflow": aegis_workflow,
 };
 
 export default workflows;

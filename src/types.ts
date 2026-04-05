@@ -6,7 +6,7 @@
 /**
  * Storage class for a workflow-level volume declaration (ADR-050)
  */
-export type WorkflowStorageClass = 'ephemeral' | 'persistent';
+export type WorkflowStorageClass = "ephemeral" | "persistent";
 
 /**
  * Named volume declared in spec.volumes (ADR-050)
@@ -102,19 +102,19 @@ export interface ExecuteContainerRunResponse {
  * Declares how the workflow provisions shared storage for its steps.
  */
 export interface WorkflowWorkspaceSpec {
-  storage_class: 'ephemeral' | 'persistent'
-  ttl_hours?: number
-  size_limit_mb?: number
-  volume_id?: string
-  blackboard_key?: string
+  storage_class: "ephemeral" | "persistent";
+  ttl_hours?: number;
+  size_limit_mb?: number;
+  volume_id?: string;
+  blackboard_key?: string;
 }
 
 /**
  * Workflow-level storage configuration (WORKFLOW_MANIFEST_SPEC_V1 §spec.storage).
  */
 export interface WorkflowStorageSpec {
-  workspace?: WorkflowWorkspaceSpec
-  shared_volumes?: WorkflowVolumeSpec[]
+  workspace?: WorkflowWorkspaceSpec;
+  shared_volumes?: WorkflowVolumeSpec[];
 }
 
 /**
@@ -131,9 +131,7 @@ export interface TemporalWorkflowDefinition {
   /** Workflow-level storage configuration (WORKFLOW_MANIFEST_SPEC_V1 §spec.storage) */
   spec_storage?: WorkflowStorageSpec;
   /** Visibility scope for this workflow definition (ADR-076) */
-  scope?: 'global' | 'tenant' | 'user';
-  /** Owner user ID when scope is 'user' (ADR-076) */
-  owner_user_id?: string;
+  scope?: "global" | "tenant";
 }
 
 /**
@@ -157,7 +155,7 @@ export interface WorkflowState {
   // Agent-specific fields
   agent?: string;
   input?: string;
-  isolation?: 'inherit' | 'firecracker' | 'docker' | 'process';
+  isolation?: "inherit" | "firecracker" | "docker" | "process";
   timeout?: string;
 
   // Agent inner-loop validation (ADR-016 / ADR-017)
@@ -198,11 +196,11 @@ export interface WorkflowState {
 
   // ParallelContainerRun-specific fields (ADR-050)
   parallel_container_steps?: ContainerRunConfig[];
-  parallel_container_completion?: 'all_succeed' | 'any_succeed' | 'best_effort';
+  parallel_container_completion?: "all_succeed" | "any_succeed" | "best_effort";
 
   // Subworkflow-specific (ADR-065)
   subworkflow_id?: string;
-  subworkflow_mode?: 'blocking' | 'fire_and_forget';
+  subworkflow_mode?: "blocking" | "fire_and_forget";
   subworkflow_result_key?: string;
   subworkflow_input?: string;
 
@@ -213,7 +211,14 @@ export interface WorkflowState {
 /**
  * State kind enum
  */
-export type StateKind = 'Agent' | 'System' | 'Human' | 'ParallelAgents' | 'ContainerRun' | 'ParallelContainerRun' | 'Subworkflow';
+export type StateKind =
+  | "Agent"
+  | "System"
+  | "Human"
+  | "ParallelAgents"
+  | "ContainerRun"
+  | "ParallelContainerRun"
+  | "Subworkflow";
 
 /**
  * Parallel agent configuration
@@ -228,7 +233,7 @@ export interface ParallelAgentConfig {
  * Consensus configuration for ParallelAgents
  */
 export interface ConsensusConfig {
-  strategy: 'weighted_average' | 'majority_vote' | 'unanimous' | 'best_of_n';
+  strategy: "weighted_average" | "majority_vote" | "unanimous" | "best_of_n";
   threshold?: number;
   agreement?: number;
   n?: number;
@@ -254,24 +259,24 @@ export interface TransitionRule {
  * Transition condition types
  */
 export type TransitionCondition =
-  | 'always'
-  | 'on_success'
-  | 'on_failure'
-  | 'exit_code_zero'
-  | 'exit_code_non_zero'
-  | 'exit_code'
-  | 'score_above'
-  | 'score_below'
-  | 'score_between'
-  | 'confidence_above'
-  | 'score_and_confidence_above'
-  | 'consensus'
-  | 'all_approved'
-  | 'any_rejected'
-  | 'input_equals'
-  | 'input_equals_yes'
-  | 'input_equals_no'
-  | 'custom';
+  | "always"
+  | "on_success"
+  | "on_failure"
+  | "exit_code_zero"
+  | "exit_code_non_zero"
+  | "exit_code"
+  | "score_above"
+  | "score_below"
+  | "score_between"
+  | "confidence_above"
+  | "score_and_confidence_above"
+  | "consensus"
+  | "all_approved"
+  | "any_rejected"
+  | "input_equals"
+  | "input_equals_yes"
+  | "input_equals_no"
+  | "custom";
 
 /**
  * Workflow input parameters
@@ -294,7 +299,7 @@ export interface WorkflowInput {
  * Workflow result
  */
 export interface WorkflowResult {
-  status: 'completed' | 'failed' | 'cancelled' | 'timed_out';
+  status: "completed" | "failed" | "cancelled" | "timed_out";
   output?: any;
   error?: string;
   iterations?: number;
@@ -313,7 +318,7 @@ export type Blackboard = Record<string, any>;
  */
 export interface AgentExecutionResult {
   execution_id: string;
-  status: 'completed' | 'failed';
+  status: "completed" | "failed";
   output: string;
   error?: string;
   iterations: number;
@@ -393,9 +398,14 @@ export interface ExecuteAgentRequest {
  * Execution event (streaming response)
  */
 export interface ExecutionEvent {
-  event_type: 'ExecutionStarted' | 'IterationStarted' | 'IterationCompleted' |
-  'IterationFailed' | 'RefinementApplied' | 'ExecutionCompleted' |
-  'ExecutionFailed';
+  event_type:
+    | "ExecutionStarted"
+    | "IterationStarted"
+    | "IterationCompleted"
+    | "IterationFailed"
+    | "RefinementApplied"
+    | "ExecutionCompleted"
+    | "ExecutionFailed";
   execution_id: string;
   timestamp: string;
   iteration_number?: number;
@@ -457,8 +467,8 @@ export interface ValidateRequest {
  * Field names match the proto definition (aegis_runtime.proto ValidateResponse)
  */
 export interface ValidateResponse {
-  score: number;             // 0.0 - 1.0
-  confidence: number;        // 0.0 - 1.0
+  score: number; // 0.0 - 1.0
+  confidence: number; // 0.0 - 1.0
   reasoning: string;
   binary_valid: boolean;
   individual_results: JudgeResult[];

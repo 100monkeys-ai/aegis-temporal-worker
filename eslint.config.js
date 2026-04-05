@@ -1,26 +1,29 @@
-import js from '@eslint/js';
-import globals from 'globals';
-import tseslint from 'typescript-eslint';
+import js from "@eslint/js";
+import globals from "globals";
+import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'node_modules/**', 'coverage/**'],
+    ignores: ["dist/**", "node_modules/**", "coverage/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['src/**/*.ts'],
+    files: ["src/**/*.ts"],
     languageOptions: {
       globals: {
         ...globals.node,
       },
     },
     rules: {
-      '@typescript-eslint/no-explicit-any': 'off',
-      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
-      '@typescript-eslint/require-await': 'off',
-      '@typescript-eslint/restrict-template-expressions': 'off',
-      'no-case-declarations': 'off',
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { argsIgnorePattern: "^_" },
+      ],
+      "@typescript-eslint/require-await": "off",
+      "@typescript-eslint/restrict-template-expressions": "off",
+      "no-case-declarations": "off",
     },
-  }
+  },
 );

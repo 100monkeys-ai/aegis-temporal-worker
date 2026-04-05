@@ -77,26 +77,26 @@ The AEGIS Temporal Worker is the **infrastructure layer** of the Workflow Orches
 
 ```markdown
 AEGIS YAML Manifest
-    ↓ (Rust TemporalWorkflowMapper)
+↓ (Rust TemporalWorkflowMapper)
 TemporalWorkflowDefinition (JSON)
-    ↓ HTTP POST /register-workflow
+↓ HTTP POST /register-workflow
 Temporal Worker (this repo)
-    ├── Activities → gRPC → Rust AegisRuntime :50051
-    └── Events    → HTTP → Rust /v1/temporal-events
+├── Activities → gRPC → Rust AegisRuntime :50051
+└── Events → HTTP → Rust /v1/temporal-events
 ```
 
 Key source files:
 
-| File | Purpose |
-| ------ | --------- |
-| `src/index.ts` | Main entry point |
-| `src/config.ts` | Zod-validated env config |
-| `src/server.ts` | Express HTTP (workflow registration API) |
-| `src/worker.ts` | Temporal worker initialization |
-| `src/workflows/aegis-workflow.ts` | Generic Interpreter Workflow |
-| `src/activities/index.ts` | Temporal activities (gRPC calls to Rust) |
-| `src/grpc/client.ts` | gRPC client for AegisRuntime service |
-| `aegis-proto/proto/aegis_runtime.proto` | gRPC service definition (git submodule) |
+| File                                    | Purpose                                  |
+| --------------------------------------- | ---------------------------------------- |
+| `src/index.ts`                          | Main entry point                         |
+| `src/config.ts`                         | Zod-validated env config                 |
+| `src/server.ts`                         | Express HTTP (workflow registration API) |
+| `src/worker.ts`                         | Temporal worker initialization           |
+| `src/workflows/aegis-workflow.ts`       | Generic Interpreter Workflow             |
+| `src/activities/index.ts`               | Temporal activities (gRPC calls to Rust) |
+| `src/grpc/client.ts`                    | gRPC client for AegisRuntime service     |
+| `aegis-proto/proto/aegis_runtime.proto` | gRPC service definition (git submodule)  |
 
 ## Contribution Workflow
 
