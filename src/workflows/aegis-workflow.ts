@@ -993,7 +993,14 @@ async function evaluateCondition(
 }
 
 function renderTemplate(tmpl: string, ctx: any): string {
-  return Handlebars.compile(tmpl)(ctx);
+  // Expose the full context under a `blackboard` key so workflow YAML templates
+  // can reference state results via either `{{EXECUTE_CODE.output.stdout}}` or
+  // `{{blackboard.EXECUTE_CODE.output.stdout}}`.  Without this, any template
+  // that uses the `blackboard.X` path style silently resolves to an empty string
+  // because there is no `blackboard` property on the top-level context object,
+  // causing downstream agents to receive truncated or empty inputs.
+  const enrichedCtx = { ...ctx, blackboard: ctx };
+  return Handlebars.compile(tmpl)(enrichedCtx);
 }
 
 function parseTimeout(str: string): number {
