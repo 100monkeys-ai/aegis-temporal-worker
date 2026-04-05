@@ -650,7 +650,12 @@ async function executeState(
         command: renderedCommand,
         env: crEnv,
         workdir: renderedWorkdir,
-        volumes: state.container_run_volumes ?? [],
+        volumes: (state.container_run_volumes ?? []).map((vm) => {
+          const resolvedName =
+            (blackboard[`${vm.name}_volume_id`] as string | undefined) ??
+            vm.name;
+          return { ...vm, name: resolvedName };
+        }),
         resources: state.container_run_resources,
         registry_credentials: state.container_run_registry_credentials,
         shell: state.container_run_shell ?? false,
