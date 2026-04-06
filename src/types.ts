@@ -9,6 +9,42 @@
 export type WorkflowStorageClass = "ephemeral" | "persistent";
 
 /**
+ * Output handler configuration — egress mechanism fired after state/execution completes.
+ * ADR-103: Agent Output Handler.
+ */
+export type OutputHandlerConfig =
+  | {
+      type: "agent";
+      agent_id: string;
+      input_template?: string;
+      timeout_seconds?: number;
+      required: boolean;
+    }
+  | {
+      type: "container";
+      image: string;
+      command: string[];
+      env?: Record<string, string>;
+      required: boolean;
+    }
+  | {
+      type: "mcp_tool";
+      tool_name: string;
+      arguments: Record<string, unknown>;
+      timeout_seconds?: number;
+      required: boolean;
+    }
+  | {
+      type: "webhook";
+      url: string;
+      method?: string;
+      headers?: Record<string, string>;
+      body_template?: string;
+      timeout_seconds?: number;
+      required: boolean;
+    };
+
+/**
  * Named volume declared in spec.volumes (ADR-050)
  * Forwarded from Rust TemporalWorkflowDefinition.spec_storage.shared_volumes.
  */
@@ -203,6 +239,9 @@ export interface WorkflowState {
   subworkflow_mode?: "blocking" | "fire_and_forget";
   subworkflow_result_key?: string;
   subworkflow_input?: string;
+
+  // Output handler — egress mechanism fired after state execution (ADR-103)
+  output_handler?: OutputHandlerConfig;
 
   // Transitions
   transitions: TransitionRule[];

@@ -42,6 +42,7 @@ const {
   publishEventActivity,
   executeContainerRunActivity,
   executeParallelContainerRunActivity,
+  executeOutputHandlerActivity,
 } = agentActivities;
 
 const { executeAgentActivity: executeAgentTerminalActivity } =
@@ -530,6 +531,26 @@ async function executeState(
         }
       }
 
+      if (state.output_handler) {
+        try {
+          await executeOutputHandlerActivity({
+            executionId,
+            tenantId: (blackboard.tenant_id as string) ?? "",
+            finalOutput:
+              typeof lastOutput === "string"
+                ? lastOutput
+                : JSON.stringify(lastOutput),
+            handlerConfigJson: JSON.stringify(state.output_handler),
+          });
+        } catch (err) {
+          if (state.output_handler.required) {
+            throw err;
+          }
+          // fire-and-forget: log and continue
+          console.warn("Optional output handler failed:", err);
+        }
+      }
+
       return lastOutput;
 
     case "System":
@@ -580,7 +601,7 @@ async function executeState(
       }
       return { response: hr, timeout: false };
 
-    case "ParallelAgents":
+    case "ParallelAgents": {
       if (!state.agents || !state.consensus)
         throw new Error("Invalid ParallelAgents State");
       const agentConfigs = state.agents.map((a) => ({
@@ -588,7 +609,7 @@ async function executeState(
         input: renderTemplate(a.input, blackboard),
         weight: a.weight,
       }));
-      return await executeParallelAgentsActivity({
+      const parallelResult = await executeParallelAgentsActivity({
         agents: agentConfigs,
         judges: state.judges_for_parallel,
         consensus: {
@@ -598,6 +619,29 @@ async function executeState(
         securityContextName,
         tenantId: blackboard.tenant_id as string | undefined,
       });
+
+      if (state.output_handler) {
+        try {
+          await executeOutputHandlerActivity({
+            executionId,
+            tenantId: (blackboard.tenant_id as string) ?? "",
+            finalOutput:
+              typeof parallelResult === "string"
+                ? parallelResult
+                : JSON.stringify(parallelResult),
+            handlerConfigJson: JSON.stringify(state.output_handler),
+          });
+        } catch (err) {
+          if (state.output_handler.required) {
+            throw err;
+          }
+          // fire-and-forget: log and continue
+          console.warn("Optional output handler failed:", err);
+        }
+      }
+
+      return parallelResult;
+    }
 
     case "ContainerRun": {
       if (!state.container_run_image || !state.container_run_command) {
@@ -680,7 +724,7 @@ async function executeState(
         });
       }
 
-      return {
+      const crStateResult = {
         status: crResult.exit_code === 0 ? "success" : "failed",
         output: {
           exit_code: crResult.exit_code,
@@ -695,6 +739,25 @@ async function executeState(
         duration_ms: crResult.duration_ms,
         attempts: crResult.attempts,
       };
+
+      if (state.output_handler) {
+        try {
+          await executeOutputHandlerActivity({
+            executionId,
+            tenantId: (blackboard.tenant_id as string) ?? "",
+            finalOutput: JSON.stringify(crStateResult),
+            handlerConfigJson: JSON.stringify(state.output_handler),
+          });
+        } catch (err) {
+          if (state.output_handler.required) {
+            throw err;
+          }
+          // fire-and-forget: log and continue
+          console.warn("Optional output handler failed:", err);
+        }
+      }
+
+      return crStateResult;
     }
 
     case "ParallelContainerRun": {
