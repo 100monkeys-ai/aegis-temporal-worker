@@ -406,9 +406,13 @@ class AegisRuntimeClient {
   async executeSystemCommand(
     request: ExecuteSystemCommandRequest,
   ): Promise<ExecuteSystemCommandResponse> {
+    const token = await getServiceToken();
+    const meta = new grpc.Metadata();
+    meta.add("authorization", `Bearer ${token}`);
     return new Promise((resolve, reject) => {
       this.client.ExecuteSystemCommand(
         request,
+        meta,
         (error: Error | null, response: ExecuteSystemCommandResponse) => {
           if (error) {
             logger.error({ error }, "System command execution failed");
@@ -431,9 +435,13 @@ class AegisRuntimeClient {
   async validateWithJudges(
     request: ValidateRequest,
   ): Promise<ValidateResponse> {
+    const token = await getServiceToken();
+    const meta = new grpc.Metadata();
+    meta.add("authorization", `Bearer ${token}`);
     return new Promise((resolve, reject) => {
       this.client.ValidateWithJudges(
         request,
+        meta,
         (error: Error | null, response: ValidateResponse) => {
           if (error) {
             logger.error({ error }, "Validation with judges failed");
@@ -460,9 +468,13 @@ class AegisRuntimeClient {
   async queryCortexPatterns(
     request: QueryCortexRequest,
   ): Promise<QueryCortexResponse> {
+    const token = await getServiceToken();
+    const meta = new grpc.Metadata();
+    meta.add("authorization", `Bearer ${token}`);
     return new Promise((resolve, reject) => {
       this.client.QueryCortexPatterns(
         request,
+        meta,
         (error: Error | null, response: QueryCortexResponse) => {
           if (error) {
             logger.error({ error }, "Cortex pattern query failed");
@@ -485,9 +497,13 @@ class AegisRuntimeClient {
   async storeCortexPattern(
     request: StoreCortexPatternRequest,
   ): Promise<StoreCortexPatternResponse> {
+    const token = await getServiceToken();
+    const meta = new grpc.Metadata();
+    meta.add("authorization", `Bearer ${token}`);
     return new Promise((resolve, reject) => {
       this.client.StoreCortexPattern(
         request,
+        meta,
         (error: Error | null, response: StoreCortexPatternResponse) => {
           if (error) {
             logger.error({ error }, "Cortex pattern storage failed");
@@ -510,9 +526,13 @@ class AegisRuntimeClient {
   async storeTrajectoryPattern(
     request: StoreTrajectoryPatternRequest,
   ): Promise<StoreTrajectoryPatternResponse> {
+    const token = await getServiceToken();
+    const meta = new grpc.Metadata();
+    meta.add("authorization", `Bearer ${token}`);
     return new Promise((resolve, reject) => {
       this.client.StoreTrajectoryPattern(
         request,
+        meta,
         (error: Error | null, response: StoreTrajectoryPatternResponse) => {
           if (error) {
             logger.error({ error }, "Trajectory pattern storage failed");
@@ -535,9 +555,13 @@ class AegisRuntimeClient {
   async executeContainerRun(
     request: ExecuteContainerRunRequest,
   ): Promise<ExecuteContainerRunResponse> {
+    const token = await getServiceToken();
+    const meta = new grpc.Metadata();
+    meta.add("authorization", `Bearer ${token}`);
     return new Promise((resolve, reject) => {
       this.client.ExecuteContainerRun(
         request,
+        meta,
         (error: Error | null, response: ExecuteContainerRunResponse) => {
           if (error) {
             logger.error(
