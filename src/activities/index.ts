@@ -127,6 +127,7 @@ export async function executeAgentActivity(params: {
   securityContextName?: string;
   workspaceVolumeId?: string;
   workspaceVolumeMountPath?: string;
+  workspaceRemotePath?: string;
 }): Promise<any> {
   logger.info({ agent_id: params.agentId }, "Executing agent activity");
 
@@ -163,6 +164,9 @@ export async function executeAgentActivity(params: {
     request.workspace_volume_id = params.workspaceVolumeId;
     request.workspace_volume_mount_path =
       params.workspaceVolumeMountPath ?? "/workspace";
+  }
+  if (params.workspaceRemotePath) {
+    request.workspace_remote_path = params.workspaceRemotePath;
   }
 
   try {
@@ -446,7 +450,7 @@ export async function createEphemeralWorkspaceActivity(params: {
   ttl_hours: number;
   tenant_id: string;
   size_limit_mb: number;
-}): Promise<{ volume_id: string }> {
+}): Promise<{ volume_id: string; remote_path: string | undefined }> {
   logger.info(
     { execution_id: params.execution_id },
     "Creating ephemeral workspace volume",
@@ -458,10 +462,10 @@ export async function createEphemeralWorkspaceActivity(params: {
     size_limit_mb: params.size_limit_mb,
   });
   logger.info(
-    { volume_id: response.volume_id },
+    { volume_id: response.volume_id, remote_path: response.remote_path },
     "Ephemeral workspace volume created",
   );
-  return { volume_id: response.volume_id };
+  return { volume_id: response.volume_id, remote_path: response.remote_path };
 }
 
 /**

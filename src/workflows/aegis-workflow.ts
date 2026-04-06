@@ -168,9 +168,11 @@ export async function aegis_workflow(
       size_limit_mb: ws.size_limit_mb ?? 256,
     });
     workspaceVolumeId = result.volume_id;
+    const workspaceRemotePath: string | undefined = result.remote_path;
     blackboardOverrides = {
       ...(blackboardOverrides ?? {}),
       [bbKey]: workspaceVolumeId,
+      [`${bbKey}_remote_path`]: workspaceRemotePath,
     };
   } else if (
     definition.spec_storage?.workspace?.storage_class === "persistent" &&
@@ -448,6 +450,12 @@ async function executeState(
               ? blackboard.workspace_volume_id
               : undefined;
 
+          const workspaceRemotePath =
+            typeof blackboard.workspace_volume_id_remote_path === "string" &&
+            blackboard.workspace_volume_id_remote_path.length > 0
+              ? blackboard.workspace_volume_id_remote_path
+              : undefined;
+
           const result = await (
             isTerminalValidationAgent
               ? executeAgentTerminalActivity
@@ -463,6 +471,7 @@ async function executeState(
             workspaceVolumeMountPath: workspaceVolumeId
               ? "/workspace"
               : undefined,
+            workspaceRemotePath,
           });
 
           lastOutput = result;

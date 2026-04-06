@@ -445,6 +445,10 @@ export interface ExecuteAgentRequest {
    * Defaults to /workspace when workspace_volume_id is provided.
    * Maps to proto field workspace_volume_mount_path (field 11). */
   workspace_volume_mount_path?: string;
+  /** NFS remote path for the workspace volume in SeaweedFS.
+   * When set, used directly for NFS registration instead of constructing a path.
+   * Maps to proto field workspace_remote_path (field 12). */
+  workspace_remote_path?: string;
   /** Natural-language steering for the agent ("why"). Distinct from input ("what").
    * Maps to proto field intent (ADR-092). */
   intent?: string;
