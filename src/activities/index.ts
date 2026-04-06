@@ -120,6 +120,7 @@ function normalizeAgentOutput(finalOutput: string | undefined): unknown {
 export async function executeAgentActivity(params: {
   agentId: string;
   input: string;
+  intent?: string;
   context: Blackboard;
   workflowExecutionId?: string;
   parentExecutionId?: string;
@@ -141,6 +142,10 @@ export async function executeAgentActivity(params: {
     timeout_seconds: 600,
     tenant_id: params.context?.tenant_id as string | undefined,
   };
+
+  if (params.intent) {
+    request.intent = params.intent;
+  }
 
   if (params.workflowExecutionId) {
     request.workflow_execution_id = params.workflowExecutionId;

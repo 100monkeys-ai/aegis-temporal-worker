@@ -191,6 +191,11 @@ export interface WorkflowState {
   // Agent-specific fields
   agent?: string;
   input?: string;
+  /** Optional per-state intent template (Handlebars). Rendered against blackboard
+   *  and passed as ExecuteAgentRequest.intent — the natural-language steering for
+   *  the agent. Falls back to the workflow-level intent (blackboard.intent) when
+   *  absent. ADR-092. */
+  intent?: string;
   isolation?: "inherit" | "firecracker" | "docker" | "process";
   timeout?: string;
 
@@ -440,6 +445,9 @@ export interface ExecuteAgentRequest {
    * Defaults to /workspace when workspace_volume_id is provided.
    * Maps to proto field workspace_volume_mount_path (field 11). */
   workspace_volume_mount_path?: string;
+  /** Natural-language steering for the agent ("why"). Distinct from input ("what").
+   * Maps to proto field intent (ADR-092). */
+  intent?: string;
 }
 
 /**

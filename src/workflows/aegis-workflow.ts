@@ -371,10 +371,18 @@ async function executeState(
 ): Promise<any> {
   switch (state.kind) {
     case "Agent":
-      if (!state.agent || !state.input) throw new Error("Invalid Agent State");
+      if (!state.agent || !state.input)
+        throw new Error("Invalid Agent State: missing agent or input");
 
       let iteration = 1;
       let currentInput = renderTemplate(state.input, blackboard);
+      // Resolve per-state intent: render state.intent template if present,
+      // otherwise fall back to the workflow-level intent from the blackboard (ADR-092).
+      const resolvedIntent: string = state.intent
+        ? renderTemplate(state.intent, blackboard)
+        : typeof blackboard.intent === "string"
+          ? blackboard.intent
+          : "";
       const resolvedAgent = renderTemplate(state.agent, blackboard);
       if (!resolvedAgent || resolvedAgent.trim() === "") {
         throw new Error(
@@ -447,6 +455,7 @@ async function executeState(
           )({
             agentId: resolvedAgent,
             input: currentInput,
+            intent: resolvedIntent,
             context: blackboard,
             workflowExecutionId: executionId,
             securityContextName: securityContextName,
