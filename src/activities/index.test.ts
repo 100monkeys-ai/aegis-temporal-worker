@@ -200,4 +200,50 @@ describe("Temporal activities", () => {
     expect(lint?.exit_code).toBe(1);
     expect(lint?.stderr).toContain("grpc unavailable");
   });
+
+  // Regression: ADR-100 D5 — tenantId must be an explicit typed param, not read from Blackboard
+  it("threads explicit tenantId param into the gRPC tenant_id field", async () => {
+    executeAgentMock.mockResolvedValue([
+      {
+        event_type: "ExecutionCompleted",
+        execution_id: "child-exec-tenant",
+        timestamp: "2026-04-06T00:00:00.000Z",
+        final_output: "ok",
+        total_iterations: 1,
+      },
+    ]);
+
+    await executeAgentActivity({
+      agentId: "123e4567-e89b-12d3-a456-426614174000",
+      input: "task",
+      context: {},
+      tenantId: "tenant-abc",
+    });
+
+    const request = executeAgentMock.mock.calls[0][0];
+    expect(request.tenant_id).toBe("tenant-abc");
+  });
+
+  it("does not read tenant_id from Blackboard context when tenantId param is provided", async () => {
+    executeAgentMock.mockResolvedValue([
+      {
+        event_type: "ExecutionCompleted",
+        execution_id: "child-exec-tenant-isolation",
+        timestamp: "2026-04-06T00:00:00.000Z",
+        final_output: "ok",
+        total_iterations: 1,
+      },
+    ]);
+
+    await executeAgentActivity({
+      agentId: "123e4567-e89b-12d3-a456-426614174000",
+      input: "task",
+      context: { tenant_id: "blackboard-tenant" },
+      tenantId: "explicit-tenant",
+    });
+
+    const request = executeAgentMock.mock.calls[0][0];
+    // Must use the explicit param, not the opaque Blackboard value
+    expect(request.tenant_id).toBe("explicit-tenant");
+  });
 });

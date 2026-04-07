@@ -465,6 +465,7 @@ async function executeState(
             input: currentInput,
             intent: resolvedIntent,
             context: blackboard,
+            tenantId: blackboard.tenant_id as string | undefined,
             workflowExecutionId: executionId,
             securityContextName: securityContextName,
             workspaceVolumeId,

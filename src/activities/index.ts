@@ -122,6 +122,7 @@ export async function executeAgentActivity(params: {
   input: string;
   intent?: string;
   context: Blackboard;
+  tenantId?: string;
   workflowExecutionId?: string;
   parentExecutionId?: string;
   securityContextName?: string;
@@ -131,17 +132,14 @@ export async function executeAgentActivity(params: {
 }): Promise<any> {
   logger.info({ agent_id: params.agentId }, "Executing agent activity");
 
-  const resolvedAgentId = await resolveAgentId(
-    params.agentId,
-    params.context?.tenant_id as string | undefined,
-  );
+  const resolvedAgentId = await resolveAgentId(params.agentId, params.tenantId);
 
   const request: ExecuteAgentRequest = {
     agent_id: resolvedAgentId,
     input: params.input,
     context_json: JSON.stringify(params.context),
     timeout_seconds: 600,
-    tenant_id: params.context?.tenant_id as string | undefined,
+    tenant_id: params.tenantId,
   };
 
   if (params.intent) {
