@@ -35,7 +35,7 @@ const PROTO_PATH =
 
 const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
   keepCase: true,
-  longs: String,
+  longs: Number,
   enums: String,
   defaults: true,
   oneofs: true,

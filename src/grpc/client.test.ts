@@ -335,3 +335,58 @@ describe("AegisRuntimeClient.executeAgent", () => {
     ]);
   });
 });
+
+describe("AegisRuntimeClient.executeContainerRun", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mocks.runtimeCtorMock.mockReset();
+    for (const fn of Object.values(mocks.logger)) {
+      fn.mockReset();
+    }
+  });
+
+  it("returns duration_ms as a number, not a string (proto uint64 coercion)", async () => {
+    const executeContainerRunMock = vi.fn();
+    mocks.runtimeCtorMock.mockImplementation(function () {
+      return {
+        ExecuteContainerRun: executeContainerRunMock,
+        close: mocks.closeMock,
+      };
+    });
+
+    // Simulate the gRPC response with duration_ms as a number
+    // (longs: Number ensures proto-loader returns uint64 as Number, not String)
+    executeContainerRunMock.mockImplementation(
+      (_req: any, _meta: any, cb: any) => {
+        cb(null, {
+          exit_code: 0,
+          stdout: "ok",
+          stderr: "",
+          duration_ms: 1033,
+          attempts: 1,
+        });
+      },
+    );
+
+    const { aegisRuntimeClient } = await import("./client.js");
+
+    const result = await aegisRuntimeClient.executeContainerRun({
+      execution_id: "exec-1",
+      state_name: "build",
+      name: "build-step",
+      image: "node:20",
+      command: ["echo", "hello"],
+      env: {},
+      workdir: "/app",
+      volumes: [],
+      resources: undefined,
+      registry_credentials: undefined,
+      shell: false,
+      max_attempts: 1,
+      security_context_name: undefined,
+    });
+
+    expect(result.duration_ms).toBe(1033);
+    expect(typeof result.duration_ms).toBe("number");
+  });
+});
