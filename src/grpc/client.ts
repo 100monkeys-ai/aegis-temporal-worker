@@ -23,6 +23,8 @@ import type {
   StoreTrajectoryPatternResponse,
   ExecuteContainerRunRequest,
   ExecuteContainerRunResponse,
+  InvokeOutputHandlerRequest,
+  InvokeOutputHandlerResponse,
 } from "../types.js";
 
 // Load protobuf definition
@@ -650,6 +652,44 @@ class AegisRuntimeClient {
               "Workspace volume destroyed",
             );
             resolve();
+          }
+        },
+      );
+    });
+  }
+
+  /**
+   * Invoke an output handler on the orchestrator (ADR-103)
+   */
+  async invokeOutputHandler(
+    request: InvokeOutputHandlerRequest,
+  ): Promise<InvokeOutputHandlerResponse> {
+    const token = await getServiceToken();
+    const meta = new grpc.Metadata();
+    meta.add("authorization", `Bearer ${token}`);
+    if (request.tenant_id) {
+      meta.add("x-tenant-id", request.tenant_id);
+    }
+    return new Promise((resolve, reject) => {
+      this.client.InvokeOutputHandler(
+        request,
+        meta,
+        (error: Error | null, response: InvokeOutputHandlerResponse) => {
+          if (error) {
+            logger.error(
+              { error, execution_id: request.execution_id },
+              "Output handler invocation failed",
+            );
+            reject(error);
+          } else {
+            logger.info(
+              {
+                execution_id: request.execution_id,
+                success: response.success,
+              },
+              "Output handler invoked",
+            );
+            resolve(response);
           }
         },
       );

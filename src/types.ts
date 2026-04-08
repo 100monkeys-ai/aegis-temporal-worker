@@ -630,3 +630,24 @@ export interface StoreTrajectoryPatternResponse {
   new_weight: number;
   deduplicated: boolean;
 }
+
+/**
+ * gRPC request for InvokeOutputHandler (ADR-103)
+ * Maps directly to proto InvokeOutputHandlerRequest.
+ */
+export interface InvokeOutputHandlerRequest {
+  execution_id: string;
+  tenant_id: string;
+  final_output: string;
+  handler_config_json: string;
+}
+
+/**
+ * gRPC response from InvokeOutputHandler (ADR-103)
+ * Maps directly to proto InvokeOutputHandlerResponse.
+ */
+export interface InvokeOutputHandlerResponse {
+  success: boolean;
+  result: string;
+  error: string;
+}

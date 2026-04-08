@@ -1,4 +1,5 @@
 import { logger } from "../logger.js";
+import { aegisRuntimeClient } from "../grpc/client.js";
 
 export interface OutputHandlerActivityInput {
   executionId: string;
@@ -23,5 +24,26 @@ export async function executeOutputHandlerActivity(
     },
     "[OutputHandler] Invoking handler",
   );
-  // TODO: wire gRPC call once proto is regenerated (ADR-103 InvokeOutputHandler RPC)
+
+  const response = await aegisRuntimeClient.invokeOutputHandler({
+    execution_id: input.executionId,
+    tenant_id: input.tenantId,
+    final_output: input.finalOutput,
+    handler_config_json: input.handlerConfigJson,
+  });
+
+  if (!response.success) {
+    throw new Error(
+      `Output handler failed for execution ${input.executionId}: ${response.error}`,
+    );
+  }
+
+  logger.info(
+    {
+      execution_id: input.executionId,
+      handler_type: config.type,
+      result: response.result,
+    },
+    "[OutputHandler] Handler completed successfully",
+  );
 }
