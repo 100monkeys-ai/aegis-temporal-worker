@@ -117,6 +117,7 @@ describe("Temporal activities", () => {
       status: "completed",
       output: { deployed: true },
       iterations: 1,
+      execution_id: "child-exec-2",
     });
   });
 

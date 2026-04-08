@@ -13,6 +13,7 @@ const { activityMocks, terminalActivityMocks, executeAgentRpcMock } =
       publishEventActivity: vi.fn(),
       executeContainerRunActivity: vi.fn(),
       executeParallelContainerRunActivity: vi.fn(),
+      executeOutputHandlerActivity: vi.fn(),
     },
     terminalActivityMocks: {
       executeAgentActivity: vi.fn(),
@@ -689,5 +690,118 @@ describe("aegis_workflow container orchestration behavior", () => {
     const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
     expect(result.final_state).toBe("FAIL");
     expect(result.blackboard?.TEST?.status).toBe("failed");
+  });
+});
+
+describe("output handler execution ID regression", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    for (const fn of Object.values(terminalActivityMocks)) {
+      fn.mockReset();
+    }
+    executeAgentRpcMock.mockReset();
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.executeOutputHandlerActivity.mockResolvedValue(undefined);
+  });
+
+  it("passes agent execution_id to output handler for Agent states", async () => {
+    const agentExecId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition({
+        BUILD: {
+          kind: "Agent",
+          agent: "writer-agent",
+          input: "write something",
+          transitions: [],
+          output_handler: {
+            type: "webhook",
+            url: "http://localhost:9999/hook",
+            method: "POST",
+            headers: {},
+            required: false,
+          },
+        },
+      }),
+    );
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "completed",
+      output: "written content",
+      iterations: 1,
+      execution_id: agentExecId,
+    });
+
+    await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(activityMocks.executeOutputHandlerActivity).toHaveBeenCalledTimes(1);
+    const call = activityMocks.executeOutputHandlerActivity.mock.calls[0][0];
+    expect(call.executionId).toBe(agentExecId);
+  });
+
+  it("passes empty executionId to output handler for ContainerRun states", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition({
+        BUILD: {
+          kind: "ContainerRun",
+          container_run_name: "build",
+          container_run_image: "rust:1.75",
+          container_run_command: ["cargo", "build"],
+          transitions: [],
+          output_handler: {
+            type: "webhook",
+            url: "http://localhost:9999/hook",
+            method: "POST",
+            headers: {},
+            required: false,
+          },
+        },
+      }),
+    );
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      duration_ms: 100,
+      attempts: 1,
+    });
+
+    await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(activityMocks.executeOutputHandlerActivity).toHaveBeenCalledTimes(1);
+    const call = activityMocks.executeOutputHandlerActivity.mock.calls[0][0];
+    expect(call.executionId).toBe("");
+  });
+
+  it("passes empty executionId when agent result has no execution_id", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition({
+        BUILD: {
+          kind: "Agent",
+          agent: "writer-agent",
+          input: "write something",
+          transitions: [],
+          output_handler: {
+            type: "webhook",
+            url: "http://localhost:9999/hook",
+            method: "POST",
+            headers: {},
+            required: false,
+          },
+        },
+      }),
+    );
+    // Simulate agent result WITHOUT execution_id (e.g. synthesized terminal event)
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "completed",
+      output: "written content",
+      iterations: 1,
+    });
+
+    await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(activityMocks.executeOutputHandlerActivity).toHaveBeenCalledTimes(1);
+    const call = activityMocks.executeOutputHandlerActivity.mock.calls[0][0];
+    expect(call.executionId).toBe("");
   });
 });

@@ -189,6 +189,7 @@ export async function executeAgentActivity(params: {
         status: "completed",
         output: normalizeAgentOutput(completedEvent.final_output),
         iterations: completedEvent.total_iterations || 0,
+        execution_id: completedEvent.execution_id || undefined,
       };
     }
 
@@ -197,6 +198,7 @@ export async function executeAgentActivity(params: {
         status: "failed",
         error: failedEvent.reason || "Unknown error",
         iterations: failedEvent.total_iterations || 0,
+        execution_id: failedEvent.execution_id || undefined,
       };
     }
 

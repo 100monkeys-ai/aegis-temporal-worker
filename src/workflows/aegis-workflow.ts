@@ -551,9 +551,20 @@ async function executeState(
       }
 
       if (state.output_handler) {
+        // Use the agent execution ID when available so the output handler can
+        // spawn a child execution linked to the correct parent. Falls back to
+        // the workflow-level executionId for states without an agent execution.
+        // Extract the agent execution ID from the last iteration result.
+        // Empty string signals the orchestrator to spawn a standalone execution.
+        const agentExecutionId =
+          lastOutput &&
+          typeof lastOutput === "object" &&
+          lastOutput.execution_id
+            ? (lastOutput.execution_id as string)
+            : "";
         try {
           await executeOutputHandlerActivity({
-            executionId,
+            executionId: agentExecutionId,
             tenantId: (blackboard.tenant_id as string) ?? "",
             finalOutput:
               typeof lastOutput === "string"
@@ -640,9 +651,11 @@ async function executeState(
       });
 
       if (state.output_handler) {
+        // ParallelAgents has no single agent execution — pass empty string
+        // so the orchestrator spawns a standalone output handler execution.
         try {
           await executeOutputHandlerActivity({
-            executionId,
+            executionId: "",
             tenantId: (blackboard.tenant_id as string) ?? "",
             finalOutput:
               typeof parallelResult === "string"
@@ -760,9 +773,11 @@ async function executeState(
       };
 
       if (state.output_handler) {
+        // ContainerRun has no agent execution — pass empty string so the
+        // orchestrator spawns a standalone output handler execution.
         try {
           await executeOutputHandlerActivity({
-            executionId,
+            executionId: "",
             tenantId: (blackboard.tenant_id as string) ?? "",
             finalOutput: JSON.stringify(crStateResult),
             handlerConfigJson: JSON.stringify(state.output_handler),
