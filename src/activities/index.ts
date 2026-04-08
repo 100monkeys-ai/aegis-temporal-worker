@@ -74,6 +74,13 @@ async function resolveAgentId(
       continue;
     }
 
+    if (resp.status === 403) {
+      throw new Error(
+        `Agent '${nameOrId}' lookup returned HTTP 403 (Forbidden). ` +
+          `The Temporal worker service account may lack the 'agent:read' scope. ` +
+          `Check Keycloak client configuration.`,
+      );
+    }
     throw new Error(
       `Agent '${nameOrId}' not found (HTTP ${resp.status}). ` +
         `Deploy it with 'aegis agent deploy' before running this workflow.`,

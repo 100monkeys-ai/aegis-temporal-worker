@@ -40,6 +40,8 @@ export async function getServiceToken(): Promise<string> {
     grant_type: "client_credentials",
     client_id: clientId,
     client_secret: clientSecret,
+    scope:
+      "agent:read agent:execute execution:read execution:stream workflow:read volume:read volume:write",
   });
 
   const response = await fetch(tokenUrl, {
