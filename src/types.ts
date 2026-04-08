@@ -545,7 +545,7 @@ export interface JudgeResult {
 }
 
 /**
- * Request to query Cortex for patterns (STUBBED)
+ * Request to query Cortex for patterns
  */
 export interface QueryCortexRequest {
   error_signature: string;
@@ -553,7 +553,7 @@ export interface QueryCortexRequest {
 }
 
 /**
- * Cortex pattern (STUBBED)
+ * Cortex pattern
  */
 export interface CortexPattern {
   pattern_id: string;
@@ -564,7 +564,7 @@ export interface CortexPattern {
 }
 
 /**
- * Response from Cortex pattern query (STUBBED)
+ * Response from Cortex pattern query
  */
 export interface QueryCortexResponse {
   patterns: CortexPattern[];
