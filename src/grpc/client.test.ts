@@ -280,6 +280,7 @@ describe("AegisRuntimeClient.executeAgent", () => {
 
     expect(mocks.fetchMock).toHaveBeenCalledWith(
       "http://orchestrator.test/v1/executions/exec-4",
+      { headers: { Authorization: "Bearer test-token" } },
     );
     expect(mocks.logger.info).toHaveBeenCalledWith(
       expect.objectContaining({

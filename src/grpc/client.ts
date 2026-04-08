@@ -74,7 +74,10 @@ function executionStatusUrl(executionId: string): string {
 async function fetchPersistedExecutionStatus(
   executionId: string,
 ): Promise<string | null> {
-  const resp = await fetch(executionStatusUrl(executionId));
+  const token = await getServiceToken();
+  const resp = await fetch(executionStatusUrl(executionId), {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   if (!resp.ok) {
     throw new Error(
       `Failed to fetch execution ${executionId} status (HTTP ${resp.status})`,
