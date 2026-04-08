@@ -119,6 +119,8 @@ export interface ExecuteContainerRunRequest {
   max_attempts?: number;
   /** Security context name for policy enforcement. */
   security_context_name?: string;
+  /** The workflow execution ID for correlating container runs back to their parent workflow. */
+  workflow_execution_id?: string;
 }
 
 /**

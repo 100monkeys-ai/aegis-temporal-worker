@@ -737,6 +737,7 @@ async function executeState(
         shell: state.container_run_shell ?? false,
         max_attempts: state.container_run_retry?.max_attempts ?? 1,
         security_context_name: securityContextName,
+        workflow_execution_id: executionId,
       });
 
       if (crResult.exit_code === 0) {
