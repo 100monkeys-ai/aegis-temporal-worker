@@ -170,6 +170,9 @@ export interface TemporalWorkflowDefinition {
   spec_storage?: WorkflowStorageSpec;
   /** Visibility scope for this workflow definition (ADR-076) */
   scope?: "global" | "tenant";
+  /** Maximum total state transitions before the workflow terminates.
+   *  Default: 50. Ceiling: 100. */
+  max_total_transitions?: number;
 }
 
 /**
@@ -249,6 +252,11 @@ export interface WorkflowState {
 
   // Output handler — egress mechanism fired after state execution (ADR-103)
   output_handler?: OutputHandlerConfig;
+
+  /** Maximum number of times this state can be visited before the workflow terminates.
+   *  Prevents infinite retry loops in FSMs with backward transitions.
+   *  Default: 5. Ceiling: 20. */
+  max_state_visits?: number;
 
   // Transitions
   transitions: TransitionRule[];

@@ -989,3 +989,127 @@ describe("output handler execution ID regression", () => {
     expect(call.executionId).toBe("");
   });
 });
+
+describe("max_state_visits and max_total_transitions", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    for (const fn of Object.values(terminalActivityMocks)) {
+      fn.mockReset();
+    }
+    executeAgentRpcMock.mockReset();
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.executeSystemCommandActivity.mockResolvedValue({
+      status: "success",
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+    });
+  });
+
+  it("terminates workflow when a state exceeds its explicit max_state_visits", async () => {
+    // A -> B -> A loop where A has max_state_visits: 2
+    // A will be visited twice; on the third visit it should terminate.
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          A: {
+            kind: "System",
+            command: "echo a",
+            max_state_visits: 2,
+            transitions: [{ condition: "always", target: "B" }],
+          },
+          B: {
+            kind: "System",
+            command: "echo b",
+            transitions: [{ condition: "always", target: "A" }],
+          },
+        },
+        "A",
+      ),
+    );
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("failed");
+    expect(result.output?.error).toContain(
+      'State "A" exceeded max_state_visits limit of 2',
+    );
+    // A visited at iteration 1, 3 (after A->B->A), then iteration 5 triggers the limit
+    expect(activityMocks.publishEventActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: "WorkflowStateVisitLimitExceeded",
+        state_name: "A",
+        max_visits: 2,
+        actual_visits: 2,
+      }),
+    );
+  });
+
+  it("applies default max_state_visits of 5 when not explicitly set", async () => {
+    // A -> B -> A loop with no explicit max_state_visits
+    // Should terminate after A is visited 5 times (default)
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          A: {
+            kind: "System",
+            command: "echo a",
+            transitions: [{ condition: "always", target: "B" }],
+          },
+          B: {
+            kind: "System",
+            command: "echo b",
+            transitions: [{ condition: "always", target: "A" }],
+          },
+        },
+        "A",
+      ),
+    );
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("failed");
+    expect(result.output?.error).toContain(
+      'State "A" exceeded max_state_visits limit of 5',
+    );
+  });
+
+  it("terminates workflow when max_total_transitions is exceeded", async () => {
+    // Linear chain A -> B -> C -> A with max_total_transitions: 3
+    // Should terminate after 3 transitions total
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue({
+      ...baseDefinition(
+        {
+          A: {
+            kind: "System",
+            command: "echo a",
+            max_state_visits: 20,
+            transitions: [{ condition: "always", target: "B" }],
+          },
+          B: {
+            kind: "System",
+            command: "echo b",
+            max_state_visits: 20,
+            transitions: [{ condition: "always", target: "C" }],
+          },
+          C: {
+            kind: "System",
+            command: "echo c",
+            max_state_visits: 20,
+            transitions: [{ condition: "always", target: "A" }],
+          },
+        },
+        "A",
+      ),
+      max_total_transitions: 3,
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toBe("Max iterations exceeded");
+    expect(result.iterations).toBe(3);
+  });
+});

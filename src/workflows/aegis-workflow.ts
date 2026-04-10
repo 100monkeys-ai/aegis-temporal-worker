@@ -202,9 +202,16 @@ export async function aegis_workflow(
   };
 
   // 3. Execution Loop
+  const DEFAULT_MAX_STATE_VISITS = 5;
+  const DEFAULT_MAX_TOTAL_TRANSITIONS = 50;
+
   let currentState: string | null = definition.initial_state;
   let iterationCount = 0;
-  const maxIterations = 1000;
+  const maxIterations = Math.min(
+    definition.max_total_transitions ?? DEFAULT_MAX_TOTAL_TRANSITIONS,
+    100,
+  );
+  const stateVisitCounts: Record<string, number> = {};
 
   while (currentState !== null && iterationCount < maxIterations) {
     iterationCount++;
@@ -214,6 +221,45 @@ export async function aegis_workflow(
       const err = `State "${currentState}" not found in definition`;
       await emit("WorkflowExecutionFailed", { error: err });
       throw new Error(err);
+    }
+
+    // Track state visits
+    stateVisitCounts[currentState] = (stateVisitCounts[currentState] || 0) + 1;
+    const effectiveMaxVisits = Math.min(
+      state.max_state_visits ?? DEFAULT_MAX_STATE_VISITS,
+      20,
+    );
+
+    // Check per-state visit limit
+    if (stateVisitCounts[currentState] > effectiveMaxVisits) {
+      await emit("WorkflowStateVisitLimitExceeded", {
+        state_name: currentState,
+        max_visits: effectiveMaxVisits,
+        actual_visits: stateVisitCounts[currentState] - 1,
+      });
+      // ADR-087: destroy ephemeral workspace volume on state visit limit exceeded
+      if (workspaceVolumeId) {
+        try {
+          await workspaceActivities.destroyWorkspaceVolumeActivity({
+            volume_id: workspaceVolumeId,
+            execution_id: executionId,
+            tenant_id: resolvedTenantId,
+          });
+        } catch {
+          workflow.log.warn(
+            "Failed to destroy workspace volume; TTL will clean up",
+          );
+        }
+      }
+      return {
+        status: "failed" as const,
+        output: {
+          error: `State "${currentState}" exceeded max_state_visits limit of ${effectiveMaxVisits}`,
+        },
+        iterations: iterationCount,
+        final_state: currentState,
+        blackboard,
+      };
     }
 
     try {
