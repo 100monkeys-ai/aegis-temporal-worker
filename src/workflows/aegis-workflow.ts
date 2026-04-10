@@ -704,7 +704,12 @@ async function executeState(
       }
 
       // ADR-092: inject caller-supplied input fields as INTENT_INPUTS for parametric scripts
-      if (blackboard.input && typeof blackboard.input === "object") {
+      // Only if the workflow didn't already define INTENT_INPUTS in its env section
+      if (
+        !crEnv["INTENT_INPUTS"] &&
+        blackboard.input &&
+        typeof blackboard.input === "object"
+      ) {
         const inputObj = blackboard.input as Record<string, unknown>;
         if (Object.keys(inputObj).length > 0) {
           crEnv["INTENT_INPUTS"] = JSON.stringify(inputObj);

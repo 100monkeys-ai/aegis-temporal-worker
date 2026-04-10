@@ -781,6 +781,102 @@ describe("aegis_workflow container orchestration behavior", () => {
   });
 });
 
+describe("INTENT_INPUTS env var precedence regression", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    for (const fn of Object.values(terminalActivityMocks)) {
+      fn.mockReset();
+    }
+    executeAgentRpcMock.mockReset();
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+  });
+
+  it("does not overwrite workflow-defined INTENT_INPUTS with the full input object", async () => {
+    // Regression: when a workflow template sets
+    //   container_run_env: { INTENT_INPUTS: "{{{input.inputs_json}}}" }
+    // the ADR-092 fallback was unconditionally overwriting it with
+    // JSON.stringify(blackboard.input) — which includes container_image,
+    // language, runner, etc., not just the user's inputs.
+    const userInputs = JSON.stringify({ x: 42, name: "test" });
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          EXECUTE_CODE: {
+            kind: "ContainerRun",
+            container_run_name: "run",
+            container_run_image: "python:3.12-slim",
+            container_run_command: ["python3", "/workspace/solution.py"],
+            container_run_env: {
+              INTENT_INPUTS: "{{{input.inputs_json}}}",
+            },
+            transitions: [],
+          },
+        },
+        "EXECUTE_CODE",
+      ),
+    );
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      duration_ms: 50,
+      attempts: 1,
+    });
+
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {
+        container_image: "python:3.12-slim",
+        language: "python",
+        runner: "python3",
+        inputs_json: userInputs,
+      },
+    });
+
+    const call = activityMocks.executeContainerRunActivity.mock.calls[0][0];
+    // INTENT_INPUTS must be the rendered template value (just user inputs),
+    // NOT JSON.stringify of the entire input object
+    expect(call.env.INTENT_INPUTS).toBe(userInputs);
+  });
+
+  it("falls back to ADR-092 injection when workflow does not define INTENT_INPUTS", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          EXECUTE_CODE: {
+            kind: "ContainerRun",
+            container_run_name: "run",
+            container_run_image: "python:3.12-slim",
+            container_run_command: ["python3", "/workspace/solution.py"],
+            transitions: [],
+          },
+        },
+        "EXECUTE_CODE",
+      ),
+    );
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      duration_ms: 50,
+      attempts: 1,
+    });
+
+    const inputPayload = { language: "python", runner: "python3" };
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: inputPayload,
+    });
+
+    const call = activityMocks.executeContainerRunActivity.mock.calls[0][0];
+    // When no workflow-level INTENT_INPUTS exists, the ADR-092 fallback
+    // should inject the full input object
+    expect(call.env.INTENT_INPUTS).toBe(JSON.stringify(inputPayload));
+  });
+});
+
 describe("output handler execution ID regression", () => {
   beforeEach(() => {
     for (const fn of Object.values(activityMocks)) {
