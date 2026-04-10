@@ -277,6 +277,94 @@ describe("aegis_workflow container orchestration behavior", () => {
     expect(testOutput?.["lint"]?.exit_code).toBe(0);
   });
 
+  it("passes -s flag when runner_flags is '-s' so Python does not prepend /workspace to sys.path", async () => {
+    // Regression: without runner_flags="-s", `python /workspace/solution.py` puts
+    // /workspace at sys.path[0].  Every import then triggers _fill_cache which
+    // calls readdir on the FUSE mount — a directory-enumeration operation the FUSE
+    // implementation does not support — yielding OSError: [Errno 5] Input/output
+    // error before a single line of user code executes.
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          EXECUTE_CODE: {
+            kind: "ContainerRun",
+            container_run_name: "execute-user-code",
+            container_run_image: "python:3.12-slim",
+            container_run_command: [
+              "{{input.runner}}",
+              "{{input.runner_flags}}",
+              "/workspace/solution.{{input.language_ext}}",
+            ],
+            transitions: [],
+          },
+        },
+        "EXECUTE_CODE",
+      ),
+    );
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "42",
+      stderr: "",
+      duration_ms: 80,
+      attempts: 1,
+    });
+
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {
+        runner: "python3",
+        runner_flags: "-s",
+        language_ext: "py",
+      },
+    });
+
+    const call = activityMocks.executeContainerRunActivity.mock.calls[0][0];
+    expect(call.command).toEqual(["python3", "-s", "/workspace/solution.py"]);
+  });
+
+  it("omits runner_flags from command when runner_flags is empty string", async () => {
+    // Regression: when runner_flags resolves to "" (e.g. for node or bash), the
+    // empty string must not be forwarded as an argument — it would be treated as
+    // an invalid filename by the interpreter.
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          EXECUTE_CODE: {
+            kind: "ContainerRun",
+            container_run_name: "execute-user-code",
+            container_run_image: "node:22-slim",
+            container_run_command: [
+              "{{input.runner}}",
+              "{{input.runner_flags}}",
+              "/workspace/solution.{{input.language_ext}}",
+            ],
+            transitions: [],
+          },
+        },
+        "EXECUTE_CODE",
+      ),
+    );
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "hello",
+      stderr: "",
+      duration_ms: 40,
+      attempts: 1,
+    });
+
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {
+        runner: "node",
+        runner_flags: "",
+        language_ext: "js",
+      },
+    });
+
+    const call = activityMocks.executeContainerRunActivity.mock.calls[0][0];
+    expect(call.command).toEqual(["node", "/workspace/solution.js"]);
+  });
+
   it("merges startup blackboard overrides at top level and preserves workflow metadata", async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue(
       baseDefinition(

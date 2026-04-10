@@ -686,9 +686,9 @@ async function executeState(
         state.container_run_image,
         blackboard,
       );
-      const renderedCommand = state.container_run_command.map((arg: string) =>
-        renderTemplate(arg, blackboard),
-      );
+      const renderedCommand = state.container_run_command
+        .map((arg: string) => renderTemplate(arg, blackboard))
+        .filter((arg: string) => arg !== "");
       const renderedName = state.container_run_name
         ? renderTemplate(state.container_run_name, blackboard)
         : stateName;
