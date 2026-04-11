@@ -251,9 +251,10 @@ export async function aegis_workflow(
             execution_id: executionId,
             tenant_id: resolvedTenantId,
           });
-        } catch {
+        } catch (err) {
           workflow.log.warn(
             "Failed to destroy workspace volume; TTL will clean up",
+            { error: String(err), volume_id: workspaceVolumeId },
           );
         }
       }
@@ -304,6 +305,7 @@ export async function aegis_workflow(
           } catch (err) {
             workflow.log.warn(
               "Failed to destroy workspace volume; TTL will clean up",
+              { error: String(err), volume_id: workspaceVolumeId },
             );
           }
         }
@@ -338,6 +340,7 @@ export async function aegis_workflow(
           } catch (err) {
             workflow.log.warn(
               "Failed to destroy workspace volume; TTL will clean up",
+              { error: String(err), volume_id: workspaceVolumeId },
             );
           }
         }
@@ -365,6 +368,7 @@ export async function aegis_workflow(
         } catch (cleanupErr) {
           workflow.log.warn(
             "Failed to destroy workspace volume; TTL will clean up",
+            { error: String(cleanupErr), volume_id: workspaceVolumeId },
           );
         }
       }
@@ -394,6 +398,7 @@ export async function aegis_workflow(
     } catch (cleanupErr) {
       workflow.log.warn(
         "Failed to destroy workspace volume; TTL will clean up",
+        { error: String(cleanupErr), volume_id: workspaceVolumeId },
       );
     }
   }
