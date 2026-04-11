@@ -990,6 +990,147 @@ describe("output handler execution ID regression", () => {
   });
 });
 
+describe("Handlebars keys helper", () => {
+  it("keys helper extracts object keys as JSON array", async () => {
+    // The keys helper is registered at module load. To exercise it end-to-end
+    // we run a workflow that uses {{{keys ...}}} in a template and verify the
+    // rendered output reaches the activity.
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          CHECK: {
+            kind: "System",
+            command: "echo {{{keys input.inputs}}}",
+            transitions: [],
+          },
+        },
+        "CHECK",
+      ),
+    );
+    activityMocks.executeSystemCommandActivity.mockResolvedValue({
+      status: "success",
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+    });
+
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { inputs: { a: 1, b: 2 } },
+    });
+
+    const call = activityMocks.executeSystemCommandActivity.mock.calls[0][0];
+    expect(call.command).toBe('echo ["a","b"]');
+  });
+
+  it("keys helper returns empty array for non-object values", async () => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          CHECK: {
+            kind: "System",
+            command: "echo {{{keys input.missing}}}",
+            transitions: [],
+          },
+        },
+        "CHECK",
+      ),
+    );
+    activityMocks.executeSystemCommandActivity.mockResolvedValue({
+      status: "success",
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+    });
+
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {},
+    });
+
+    const call = activityMocks.executeSystemCommandActivity.mock.calls[0][0];
+    expect(call.command).toBe("echo []");
+  });
+});
+
+describe("per-agent temperature threading", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    for (const fn of Object.values(terminalActivityMocks)) {
+      fn.mockReset();
+    }
+    executeAgentRpcMock.mockReset();
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+  });
+
+  it("threads state-level temperature to executeAgentActivity", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          GENERATE: {
+            kind: "Agent",
+            agent: "creative-agent",
+            input: "write a poem",
+            temperature: 0.9,
+            transitions: [],
+          },
+        },
+        "GENERATE",
+      ),
+    );
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "completed",
+      output: "a poem",
+      iterations: 1,
+    });
+
+    await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(activityMocks.executeAgentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "creative-agent",
+        temperature: 0.9,
+      }),
+    );
+  });
+
+  it("omits temperature when not set on state", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          BUILD: {
+            kind: "Agent",
+            agent: "builder-agent",
+            input: "build it",
+            transitions: [],
+          },
+        },
+        "BUILD",
+      ),
+    );
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "completed",
+      output: "built",
+      iterations: 1,
+    });
+
+    await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    const call = activityMocks.executeAgentActivity.mock.calls[0][0];
+    expect(call.temperature).toBeUndefined();
+  });
+});
+
 describe("max_state_visits and max_total_transitions", () => {
   beforeEach(() => {
     for (const fn of Object.values(activityMocks)) {

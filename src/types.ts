@@ -203,6 +203,9 @@ export interface WorkflowState {
   intent?: string;
   isolation?: "inherit" | "firecracker" | "docker" | "process";
   timeout?: string;
+  /** Per-agent LLM temperature override (0.0–2.0). When set, threaded through
+   *  to the orchestrator's generation options for this agent execution. */
+  temperature?: number;
 
   // Agent inner-loop validation (ADR-016 / ADR-017)
   /** Judges that validate each iteration output before advancing (per-state YAML declaration) */
@@ -462,6 +465,9 @@ export interface ExecuteAgentRequest {
   /** Natural-language steering for the agent ("why"). Distinct from input ("what").
    * Maps to proto field intent (ADR-092). */
   intent?: string;
+  /** Per-agent LLM temperature override (0.0–2.0). Threaded into the
+   *  orchestrator's GenerationOptions when present. */
+  temperature?: number;
 }
 
 /**

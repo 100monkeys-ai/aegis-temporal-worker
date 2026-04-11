@@ -136,6 +136,7 @@ export async function executeAgentActivity(params: {
   workspaceVolumeId?: string;
   workspaceVolumeMountPath?: string;
   workspaceRemotePath?: string;
+  temperature?: number;
 }): Promise<any> {
   logger.info({ agent_id: params.agentId }, "Executing agent activity");
 
@@ -172,6 +173,9 @@ export async function executeAgentActivity(params: {
   }
   if (params.workspaceRemotePath) {
     request.workspace_remote_path = params.workspaceRemotePath;
+  }
+  if (params.temperature !== undefined) {
+    request.temperature = params.temperature;
   }
 
   try {

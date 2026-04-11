@@ -77,6 +77,12 @@ Handlebars.registerHelper("first_line", (str: string) =>
 Handlebars.registerHelper("default", (value: any, fallback: any) =>
   value !== null && value !== undefined && value !== "" ? value : fallback,
 );
+Handlebars.registerHelper("keys", (obj: any) => {
+  if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+    return JSON.stringify(Object.keys(obj));
+  }
+  return "[]";
+});
 
 interface GenericWorkflowInput {
   workflow_id: string;
@@ -519,6 +525,7 @@ async function executeState(
               ? "/workspace"
               : undefined,
             workspaceRemotePath,
+            temperature: state.temperature,
           });
 
           lastOutput = result;
