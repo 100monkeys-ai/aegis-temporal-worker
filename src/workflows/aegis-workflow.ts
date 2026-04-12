@@ -78,8 +78,17 @@ Handlebars.registerHelper("default", (value: any, fallback: any) =>
   value !== null && value !== undefined && value !== "" ? value : fallback,
 );
 Handlebars.registerHelper("keys", (obj: any) => {
-  if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-    return JSON.stringify(Object.keys(obj));
+  let target = obj;
+  // If the value is a JSON string, parse it first
+  if (typeof target === "string") {
+    try {
+      target = JSON.parse(target);
+    } catch {
+      return "[]";
+    }
+  }
+  if (target && typeof target === "object" && !Array.isArray(target)) {
+    return JSON.stringify(Object.keys(target));
   }
   return "[]";
 });

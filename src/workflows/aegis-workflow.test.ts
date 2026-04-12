@@ -1027,6 +1027,72 @@ describe("Handlebars keys helper", () => {
     expect(call.command).toBe('echo ["a","b"]');
   });
 
+  it("keys helper parses JSON string inputs and extracts keys", async () => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          CHECK: {
+            kind: "System",
+            command: "echo {{{keys input.inputs}}}",
+            transitions: [],
+          },
+        },
+        "CHECK",
+      ),
+    );
+    activityMocks.executeSystemCommandActivity.mockResolvedValue({
+      status: "success",
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+    });
+
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { inputs: '{"log":"hello","level":"info"}' },
+    });
+
+    const call = activityMocks.executeSystemCommandActivity.mock.calls[0][0];
+    expect(call.command).toBe('echo ["log","level"]');
+  });
+
+  it("keys helper returns empty array for invalid JSON strings", async () => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          CHECK: {
+            kind: "System",
+            command: "echo {{{keys input.inputs}}}",
+            transitions: [],
+          },
+        },
+        "CHECK",
+      ),
+    );
+    activityMocks.executeSystemCommandActivity.mockResolvedValue({
+      status: "success",
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+    });
+
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { inputs: "not-valid-json" },
+    });
+
+    const call = activityMocks.executeSystemCommandActivity.mock.calls[0][0];
+    expect(call.command).toBe("echo []");
+  });
+
   it("keys helper returns empty array for non-object values", async () => {
     for (const fn of Object.values(activityMocks)) {
       fn.mockReset();
