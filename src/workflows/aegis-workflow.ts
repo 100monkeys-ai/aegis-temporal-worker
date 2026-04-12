@@ -444,6 +444,18 @@ async function executeState(
 
       let iteration = 1;
       let currentInput = renderTemplate(state.input, blackboard);
+      workflow.log.info(
+        `[DEBUG] State ${stateName} input template (raw): ${(state.input ?? "").substring(0, 200)}`,
+      );
+      workflow.log.info(
+        `[DEBUG] State ${stateName} rendered input (first 500): ${currentInput.substring(0, 500)}`,
+      );
+      workflow.log.info(
+        `[DEBUG] blackboard.input.inputs type: ${typeof blackboard?.input?.inputs}, keys: ${JSON.stringify(blackboard?.input?.inputs ? Object.keys(blackboard.input.inputs) : "N/A")}`,
+      );
+      workflow.log.info(
+        `[DEBUG] blackboard.input.inputs_json (first 100): ${String(blackboard?.input?.inputs_json ?? "MISSING").substring(0, 100)}`,
+      );
       // Resolve per-state intent: render state.intent template if present,
       // otherwise fall back to the workflow-level intent from the blackboard (ADR-092).
       const resolvedIntent: string = state.intent
