@@ -60,6 +60,16 @@ const EXECUTION_FALLBACK_POLL_MS = Number.parseInt(
   10,
 );
 
+const EXECUTION_FALLBACK_MAX_POLL_MS = Number.parseInt(
+  process.env.AEGIS_EXECUTION_FALLBACK_MAX_POLL_MS ?? "30000",
+  10,
+);
+
+const EXECUTION_FALLBACK_MAX_RETRIES = Number.parseInt(
+  process.env.AEGIS_EXECUTION_FALLBACK_MAX_RETRIES ?? "30",
+  10,
+);
+
 interface PersistedExecutionStatusResponse {
   status?: string;
   error?: string;
@@ -251,15 +261,46 @@ class AegisRuntimeClient {
         }, EXECUTION_FALLBACK_IDLE_MS);
       };
 
+      let pollAttempt = 0;
+
       const scheduleNextPoll = () => {
         if (settled || !executionId || pollTimer) {
           return;
         }
 
+        if (pollAttempt >= EXECUTION_FALLBACK_MAX_RETRIES) {
+          if (!settled) {
+            const totalIterations = events.reduce(
+              (max, e) => Math.max(max, e.iteration_number ?? 0),
+              0,
+            );
+            const failEvent: ExecutionEvent = {
+              event_type: "ExecutionFailed",
+              execution_id: executionId,
+              timestamp: new Date().toISOString(),
+              reason: `Execution status polling exhausted after ${pollAttempt} attempts`,
+              total_iterations: totalIterations,
+            };
+            events.push(failEvent);
+            settleWithEvents(
+              events,
+              "Agent execution failed: status polling exhausted",
+              "error",
+            );
+          }
+          return;
+        }
+
+        // Exponential backoff: base * 2^attempt, capped at max
+        const backoffMs = Math.min(
+          EXECUTION_FALLBACK_POLL_MS * Math.pow(2, pollAttempt),
+          EXECUTION_FALLBACK_MAX_POLL_MS,
+        );
+
         pollTimer = setTimeout(() => {
           pollTimer = undefined;
           void probePersistedTerminalState("poll_retry");
-        }, EXECUTION_FALLBACK_POLL_MS);
+        }, backoffMs);
       };
 
       const probePersistedTerminalState = async (trigger: string) => {
@@ -268,6 +309,7 @@ class AegisRuntimeClient {
         }
 
         fallbackPollInFlight = true;
+        pollAttempt++;
 
         try {
           const status = await fetchPersistedExecutionStatus(executionId);
@@ -292,13 +334,23 @@ class AegisRuntimeClient {
           }
 
           logger.debug(
-            { execution_id: executionId, status, trigger },
+            {
+              execution_id: executionId,
+              status,
+              trigger,
+              poll_attempt: pollAttempt,
+            },
             "Persisted execution state not terminal yet",
           );
           scheduleNextPoll();
-        } catch (error) {
+        } catch (err) {
           logger.warn(
-            { error, execution_id: executionId, trigger },
+            {
+              error: err instanceof Error ? err.message : String(err),
+              execution_id: executionId,
+              trigger,
+              poll_attempt: pollAttempt,
+            },
             "Failed to fetch persisted execution status",
           );
           scheduleNextPoll();

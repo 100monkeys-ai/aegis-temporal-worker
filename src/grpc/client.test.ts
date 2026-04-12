@@ -334,6 +334,110 @@ describe("AegisRuntimeClient.executeAgent", () => {
       }),
     ]);
   });
+
+  it("logs the actual error message when fetch fails, not an empty object", async () => {
+    vi.useFakeTimers();
+    const call = new EventEmitter();
+    mocks.executeAgentRpcMock.mockReturnValue(call);
+
+    // fetch rejects with a plain Error — before the fix this logged `error: {}`
+    mocks.fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+
+    process.env.AEGIS_EXECUTION_FALLBACK_MAX_RETRIES = "2";
+
+    const { aegisRuntimeClient } = await import("./client.js");
+
+    const promise = aegisRuntimeClient.executeAgent({
+      agent_id: "agent-1",
+      input: "plan",
+      context_json: "{}",
+      timeout_seconds: 300,
+    });
+
+    await Promise.resolve();
+
+    // Emit a non-terminal event so executionId is set, then end the stream
+    call.emit("data", {
+      event: "iteration_started",
+      iteration_started: {
+        execution_id: "exec-err",
+        iteration_number: 1,
+        started_at: "2026-04-09T00:00:00Z",
+      },
+    });
+    call.emit("end");
+
+    // Advance through all poll retries (2 retries with exponential backoff)
+    await vi.advanceTimersByTimeAsync(200);
+
+    const result = await promise;
+
+    // Verify the error was logged as a readable string, not `{}`
+    const warnCalls = mocks.logger.warn.mock.calls.filter(
+      ([, msg]: [any, string]) =>
+        msg === "Failed to fetch persisted execution status",
+    );
+    expect(warnCalls.length).toBeGreaterThanOrEqual(1);
+
+    for (const [ctx] of warnCalls) {
+      expect(ctx.error).toBe("ECONNREFUSED");
+      expect(ctx.error).not.toEqual({});
+    }
+
+    // Verify we eventually settled with a failure (exhausted retries)
+    const lastEvent = result[result.length - 1];
+    expect(lastEvent.event_type).toBe("ExecutionFailed");
+    expect(lastEvent.reason).toContain("polling exhausted");
+  });
+
+  it("stops polling after max retries and returns a failure result", async () => {
+    vi.useFakeTimers();
+    const call = new EventEmitter();
+    mocks.executeAgentRpcMock.mockReturnValue(call);
+
+    // Persisted status always returns "running" (non-terminal)
+    mocks.fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: "Running" }),
+    });
+
+    process.env.AEGIS_EXECUTION_FALLBACK_MAX_RETRIES = "3";
+
+    const { aegisRuntimeClient } = await import("./client.js");
+
+    const promise = aegisRuntimeClient.executeAgent({
+      agent_id: "agent-1",
+      input: "plan",
+      context_json: "{}",
+      timeout_seconds: 300,
+    });
+
+    await Promise.resolve();
+
+    call.emit("data", {
+      event: "iteration_completed",
+      iteration_completed: {
+        execution_id: "exec-bounded",
+        iteration_number: 1,
+        output: "partial",
+        completed_at: "2026-04-09T00:00:00Z",
+      },
+    });
+    call.emit("end");
+
+    // Advance enough time for all retries + backoff to complete
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const result = await promise;
+    const lastEvent = result[result.length - 1];
+
+    expect(lastEvent.event_type).toBe("ExecutionFailed");
+    expect(lastEvent.reason).toContain("polling exhausted after 3 attempts");
+    expect(lastEvent.execution_id).toBe("exec-bounded");
+
+    // Verify fetch was called exactly 3 times (not indefinitely)
+    expect(mocks.fetchMock).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("AegisRuntimeClient.executeContainerRun", () => {
