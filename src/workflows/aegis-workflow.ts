@@ -657,6 +657,7 @@ async function executeState(
                 ? lastOutput
                 : JSON.stringify(lastOutput),
             handlerConfigJson: JSON.stringify(state.output_handler),
+            intent: (blackboard.intent as string) ?? "",
           });
           if (
             handlerResult != null &&
@@ -755,6 +756,7 @@ async function executeState(
                 ? parallelResult
                 : JSON.stringify(parallelResult),
             handlerConfigJson: JSON.stringify(state.output_handler),
+            intent: (blackboard.intent as string) ?? "",
           });
           if (
             handlerResult != null &&
@@ -887,6 +889,7 @@ async function executeState(
             tenantId: (blackboard.tenant_id as string) ?? "",
             finalOutput: JSON.stringify(crStateResult),
             handlerConfigJson: JSON.stringify(state.output_handler),
+            intent: (blackboard.intent as string) ?? "",
           });
           if (handlerResult != null) {
             crStateResult.stdout = handlerResult;

@@ -6,6 +6,7 @@ export interface OutputHandlerActivityInput {
   tenantId: string;
   finalOutput: string;
   handlerConfigJson: string;
+  intent: string;
 }
 
 /**
@@ -30,6 +31,7 @@ export async function executeOutputHandlerActivity(
     tenant_id: input.tenantId,
     final_output: input.finalOutput,
     handler_config_json: input.handlerConfigJson,
+    intent: input.intent,
   });
 
   if (!response.success) {

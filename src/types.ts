@@ -689,6 +689,8 @@ export interface InvokeOutputHandlerRequest {
   tenant_id: string;
   final_output: string;
   handler_config_json: string;
+  /** Natural-language intent context from the workflow. */
+  intent?: string;
 }
 
 /**
