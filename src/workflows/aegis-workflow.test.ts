@@ -1197,6 +1197,398 @@ describe("per-agent temperature threading", () => {
   });
 });
 
+describe("output handler wiring", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    for (const fn of Object.values(terminalActivityMocks)) {
+      fn.mockReset();
+    }
+    executeAgentRpcMock.mockReset();
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+  });
+
+  it("ContainerRun state with output handler replaces stdout with handler result", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition({
+        BUILD: {
+          kind: "ContainerRun",
+          container_run_name: "build",
+          container_run_image: "rust:1.75",
+          container_run_command: ["cargo", "build"],
+          transitions: [],
+          output_handler: {
+            type: "webhook",
+            url: "http://localhost:9999/format",
+            method: "POST",
+            headers: {},
+            required: false,
+          },
+        },
+      }),
+    );
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "raw-container-stdout",
+      stderr: "",
+      duration_ms: 100,
+      attempts: 1,
+    });
+    activityMocks.executeOutputHandlerActivity.mockResolvedValue(
+      "formatted-by-handler",
+    );
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+    const build = result.blackboard?.BUILD;
+
+    expect(result.status).toBe("completed");
+    expect(build?.stdout).toBe("formatted-by-handler");
+    expect(build?.output?.stdout).toBe("formatted-by-handler");
+  });
+
+  it("Agent state with output handler merges handler result into output", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition({
+        GENERATE: {
+          kind: "Agent",
+          agent: "writer-agent",
+          input: "write something",
+          transitions: [],
+          output_handler: {
+            type: "webhook",
+            url: "http://localhost:9999/format",
+            method: "POST",
+            headers: {},
+            required: false,
+          },
+        },
+      }),
+    );
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "completed",
+      output: "raw-agent-output",
+      iterations: 1,
+      execution_id: "agent-exec-1",
+    });
+    activityMocks.executeOutputHandlerActivity.mockResolvedValue(
+      "handler-formatted-output",
+    );
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+    const gen = result.blackboard?.GENERATE;
+
+    expect(result.status).toBe("completed");
+    expect(gen?.output).toBe("handler-formatted-output");
+  });
+
+  it("output handler failure with required: true transitions to failure", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition({
+        BUILD: {
+          kind: "ContainerRun",
+          container_run_name: "build",
+          container_run_image: "rust:1.75",
+          container_run_command: ["cargo", "build"],
+          transitions: [],
+          output_handler: {
+            type: "webhook",
+            url: "http://localhost:9999/format",
+            method: "POST",
+            headers: {},
+            required: true,
+          },
+        },
+      }),
+    );
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      duration_ms: 100,
+      attempts: 1,
+    });
+    activityMocks.executeOutputHandlerActivity.mockRejectedValue(
+      new Error("Handler webhook failed"),
+    );
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("Handler webhook failed");
+  });
+
+  it("output handler failure with required: false preserves raw output and continues", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition({
+        BUILD: {
+          kind: "ContainerRun",
+          container_run_name: "build",
+          container_run_image: "rust:1.75",
+          container_run_command: ["cargo", "build"],
+          transitions: [],
+          output_handler: {
+            type: "webhook",
+            url: "http://localhost:9999/format",
+            method: "POST",
+            headers: {},
+            required: false,
+          },
+        },
+      }),
+    );
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "raw-output-preserved",
+      stderr: "",
+      duration_ms: 100,
+      attempts: 1,
+    });
+    activityMocks.executeOutputHandlerActivity.mockRejectedValue(
+      new Error("Handler failed"),
+    );
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+    const build = result.blackboard?.BUILD;
+
+    expect(result.status).toBe("completed");
+    expect(build?.stdout).toBe("raw-output-preserved");
+    expect(build?.output?.stdout).toBe("raw-output-preserved");
+  });
+});
+
+describe("output template evaluation", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    for (const fn of Object.values(terminalActivityMocks)) {
+      fn.mockReset();
+    }
+    executeAgentRpcMock.mockReset();
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.executeSystemCommandActivity.mockResolvedValue({
+      status: "success",
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+    });
+  });
+
+  it("renders output_template Handlebars expressions from blackboard into final_output", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue({
+      ...baseDefinition({
+        BUILD: {
+          kind: "ContainerRun",
+          container_run_name: "build",
+          container_run_image: "rust:1.75",
+          container_run_command: ["cargo", "build"],
+          transitions: [],
+        },
+      }),
+      output_template: {
+        result: "{{BUILD.stdout}}",
+        exit: "{{BUILD.exit_code}}",
+      },
+    });
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "build-ok",
+      stderr: "",
+      duration_ms: 120,
+      attempts: 1,
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("completed");
+    expect(result.final_output).toBeDefined();
+    expect(result.final_output?.result).toBe("build-ok");
+    expect(result.final_output?.exit).toBe("0");
+  });
+
+  it("coerces output_template integer type from rendered string to number", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue({
+      ...baseDefinition({
+        COMPUTE: {
+          kind: "ContainerRun",
+          container_run_name: "compute",
+          container_run_image: "python:3.12",
+          container_run_command: ["python", "-c", "print(42)"],
+          transitions: [],
+        },
+      }),
+      output_template: {
+        answer: "{{COMPUTE.stdout}}",
+      },
+      output_schema: {
+        type: "object",
+        properties: {
+          answer: { type: "integer" },
+        },
+      },
+    });
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "42",
+      stderr: "",
+      duration_ms: 50,
+      attempts: 1,
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.final_output?.answer).toBe(42);
+    expect(typeof result.final_output?.answer).toBe("number");
+  });
+
+  it("coerces boolean and object types correctly via output_schema", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue({
+      ...baseDefinition({
+        CHECK: {
+          kind: "ContainerRun",
+          container_run_name: "check",
+          container_run_image: "alpine",
+          container_run_command: ["echo", "true"],
+          transitions: [],
+        },
+      }),
+      output_template: {
+        passed: "{{CHECK.stdout}}",
+        metadata: "{{{CHECK.output.stdout}}}",
+      },
+      output_schema: {
+        type: "object",
+        properties: {
+          passed: { type: "boolean" },
+          metadata: { type: "object" },
+        },
+      },
+    });
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "true",
+      stderr: "",
+      duration_ms: 10,
+      attempts: 1,
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.final_output?.passed).toBe(true);
+    expect(typeof result.final_output?.passed).toBe("boolean");
+  });
+
+  it("returns undefined final_output when no output_template is defined", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition({
+        BUILD: {
+          kind: "ContainerRun",
+          container_run_name: "build",
+          container_run_image: "rust:1.75",
+          container_run_command: ["cargo", "build"],
+          transitions: [],
+        },
+      }),
+    );
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      duration_ms: 100,
+      attempts: 1,
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("completed");
+    expect(result.final_output).toBeUndefined();
+  });
+
+  it("renders missing blackboard key as empty string in output_template", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue({
+      ...baseDefinition({
+        BUILD: {
+          kind: "ContainerRun",
+          container_run_name: "build",
+          container_run_image: "rust:1.75",
+          container_run_command: ["cargo", "build"],
+          transitions: [],
+        },
+      }),
+      output_template: {
+        present: "{{BUILD.stdout}}",
+        missing: "{{NONEXISTENT.output.value}}",
+      },
+    });
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "build-ok",
+      stderr: "",
+      duration_ms: 100,
+      attempts: 1,
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.final_output?.present).toBe("build-ok");
+    expect(result.final_output?.missing).toBe("");
+  });
+});
+
+describe("ContainerRunStateResult shape", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    for (const fn of Object.values(terminalActivityMocks)) {
+      fn.mockReset();
+    }
+    executeAgentRpcMock.mockReset();
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+  });
+
+  it("ContainerRun state output matches ContainerRunStateResult with root and nested fields", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition({
+        BUILD: {
+          kind: "ContainerRun",
+          container_run_name: "build",
+          container_run_image: "rust:1.75",
+          container_run_command: ["cargo", "build"],
+          transitions: [],
+        },
+      }),
+    );
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "compiled",
+      stderr: "warn: unused",
+      duration_ms: 250,
+      attempts: 2,
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+    const build = result.blackboard?.BUILD;
+
+    expect(result.status).toBe("completed");
+    // Root-level fields
+    expect(build?.status).toBe("success");
+    expect(build?.exit_code).toBe(0);
+    expect(build?.stdout).toBe("compiled");
+    expect(build?.stderr).toBe("warn: unused");
+    expect(build?.duration_ms).toBe(250);
+    expect(build?.attempts).toBe(2);
+    // Nested output object mirrors root fields
+    expect(build?.output).toBeDefined();
+    expect(build?.output?.exit_code).toBe(0);
+    expect(build?.output?.stdout).toBe("compiled");
+    expect(build?.output?.stderr).toBe("warn: unused");
+    expect(build?.output?.duration_ms).toBe(250);
+    expect(build?.output?.attempts).toBe(2);
+  });
+});
+
 describe("max_state_visits and max_total_transitions", () => {
   beforeEach(() => {
     for (const fn of Object.values(activityMocks)) {
