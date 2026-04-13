@@ -113,6 +113,6 @@ describe("executeOutputHandlerActivity", () => {
           required: true,
         }),
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("agent output processed");
   });
 });

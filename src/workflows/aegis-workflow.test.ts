@@ -1249,21 +1249,24 @@ describe("output handler wiring", () => {
 
   it("Agent state with output handler merges handler result into output", async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue(
-      baseDefinition({
-        GENERATE: {
-          kind: "Agent",
-          agent: "writer-agent",
-          input: "write something",
-          transitions: [],
-          output_handler: {
-            type: "webhook",
-            url: "http://localhost:9999/format",
-            method: "POST",
-            headers: {},
-            required: false,
+      baseDefinition(
+        {
+          GENERATE: {
+            kind: "Agent",
+            agent: "writer-agent",
+            input: "write something",
+            transitions: [],
+            output_handler: {
+              type: "webhook",
+              url: "http://localhost:9999/format",
+              method: "POST",
+              headers: {},
+              required: false,
+            },
           },
         },
-      }),
+        "GENERATE",
+      ),
     );
     activityMocks.executeAgentActivity.mockResolvedValue({
       status: "completed",
@@ -1409,15 +1412,18 @@ describe("output template evaluation", () => {
 
   it("coerces output_template integer type from rendered string to number", async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue({
-      ...baseDefinition({
-        COMPUTE: {
-          kind: "ContainerRun",
-          container_run_name: "compute",
-          container_run_image: "python:3.12",
-          container_run_command: ["python", "-c", "print(42)"],
-          transitions: [],
+      ...baseDefinition(
+        {
+          COMPUTE: {
+            kind: "ContainerRun",
+            container_run_name: "compute",
+            container_run_image: "python:3.12",
+            container_run_command: ["python", "-c", "print(42)"],
+            transitions: [],
+          },
         },
-      }),
+        "COMPUTE",
+      ),
       output_template: {
         answer: "{{COMPUTE.stdout}}",
       },
@@ -1444,15 +1450,18 @@ describe("output template evaluation", () => {
 
   it("coerces boolean and object types correctly via output_schema", async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue({
-      ...baseDefinition({
-        CHECK: {
-          kind: "ContainerRun",
-          container_run_name: "check",
-          container_run_image: "alpine",
-          container_run_command: ["echo", "true"],
-          transitions: [],
+      ...baseDefinition(
+        {
+          CHECK: {
+            kind: "ContainerRun",
+            container_run_name: "check",
+            container_run_image: "alpine",
+            container_run_command: ["echo", "true"],
+            transitions: [],
+          },
         },
-      }),
+        "CHECK",
+      ),
       output_template: {
         passed: "{{CHECK.stdout}}",
         metadata: "{{{CHECK.output.stdout}}}",

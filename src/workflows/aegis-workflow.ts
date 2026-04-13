@@ -732,7 +732,7 @@ async function executeState(
         input: renderTemplate(a.input, blackboard),
         weight: a.weight,
       }));
-      const parallelResult = await executeParallelAgentsActivity({
+      let parallelResult = await executeParallelAgentsActivity({
         agents: agentConfigs,
         judges: state.judges_for_parallel,
         consensus: {
