@@ -12,6 +12,7 @@ export interface PublishEventParams {
   error?: string;
   iteration_number?: number;
   final_blackboard?: any;
+  final_output?: any;
   artifacts?: string[];
   timestamp?: string;
 }
