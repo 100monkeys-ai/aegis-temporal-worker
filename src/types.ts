@@ -173,6 +173,12 @@ export interface TemporalWorkflowDefinition {
   /** Maximum total state transitions before the workflow terminates.
    *  Default: 50. Ceiling: 100. */
   max_total_transitions?: number;
+  /** JSON Schema describing the workflow's final output shape (ADR-092). */
+  output_schema?: Record<string, any>;
+  /** Handlebars template object evaluated against the final blackboard to produce
+   *  structured workflow output. Leaf string values are rendered; types are
+   *  coerced according to `output_schema` when present. */
+  output_template?: Record<string, any>;
 }
 
 /**
@@ -362,6 +368,10 @@ export interface WorkflowResult {
   iterations?: number;
   final_state?: string;
   blackboard?: Record<string, any>;
+  /** Structured output produced by evaluating `output_template` against the
+   *  final blackboard. Only present when the workflow definition declares an
+   *  output_template. */
+  final_output?: Record<string, any>;
 }
 
 /**
@@ -645,6 +655,29 @@ export interface StoreTrajectoryPatternResponse {
   trajectory_id: string;
   new_weight: number;
   deduplicated: boolean;
+}
+
+/**
+ * Canonical output shape for ContainerRun workflow states.
+ *
+ * Fields are duplicated at root and inside `output` for template compatibility:
+ * workflow YAML templates may reference either `{{STATE.stdout}}` or
+ * `{{STATE.output.stdout}}` — both must resolve.
+ */
+export interface ContainerRunStateResult {
+  status: "success" | "failed";
+  output: {
+    exit_code: number;
+    stdout: string;
+    stderr: string;
+    duration_ms: number;
+    attempts: number;
+  };
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  duration_ms: number;
+  attempts: number;
 }
 
 /**

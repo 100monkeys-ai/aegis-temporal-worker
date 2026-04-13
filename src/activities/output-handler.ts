@@ -14,7 +14,7 @@ export interface OutputHandlerActivityInput {
  */
 export async function executeOutputHandlerActivity(
   input: OutputHandlerActivityInput,
-): Promise<void> {
+): Promise<string | null> {
   const config = JSON.parse(input.handlerConfigJson) as { type: string };
   logger.info(
     {
@@ -46,4 +46,6 @@ export async function executeOutputHandlerActivity(
     },
     "[OutputHandler] Handler completed successfully",
   );
+
+  return response.result ?? null;
 }

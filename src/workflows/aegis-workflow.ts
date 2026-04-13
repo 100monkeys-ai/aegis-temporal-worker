@@ -14,6 +14,7 @@ import type {
   WorkflowState,
   TransitionRule,
   JudgeConfig,
+  ContainerRunStateResult,
 } from "../types.js";
 import * as activities from "../activities/index.js";
 
@@ -318,8 +319,16 @@ export async function aegis_workflow(
             );
           }
         }
+        const finalOutput1 = definition.output_template
+          ? evaluateOutputTemplate(
+              definition.output_template,
+              definition.output_schema,
+              blackboard,
+            )
+          : undefined;
         await emit("WorkflowExecutionCompleted", {
           final_blackboard: blackboard,
+          final_output: finalOutput1,
         });
         return {
           status: "completed",
@@ -327,6 +336,7 @@ export async function aegis_workflow(
           iterations: iterationCount,
           final_state: currentState,
           blackboard,
+          final_output: finalOutput1,
         };
       }
 
@@ -353,8 +363,16 @@ export async function aegis_workflow(
             );
           }
         }
+        const finalOutput2 = definition.output_template
+          ? evaluateOutputTemplate(
+              definition.output_template,
+              definition.output_schema,
+              blackboard,
+            )
+          : undefined;
         await emit("WorkflowExecutionCompleted", {
           final_blackboard: blackboard,
+          final_output: finalOutput2,
         });
         return {
           status: "completed",
@@ -362,6 +380,7 @@ export async function aegis_workflow(
           iterations: iterationCount,
           final_state: currentState ?? undefined,
           blackboard,
+          final_output: finalOutput2,
         };
       }
     } catch (error) {
@@ -630,7 +649,7 @@ async function executeState(
             ? (lastOutput.execution_id as string)
             : "";
         try {
-          await executeOutputHandlerActivity({
+          const handlerResult = await executeOutputHandlerActivity({
             executionId: agentExecutionId,
             tenantId: (blackboard.tenant_id as string) ?? "",
             finalOutput:
@@ -639,6 +658,13 @@ async function executeState(
                 : JSON.stringify(lastOutput),
             handlerConfigJson: JSON.stringify(state.output_handler),
           });
+          if (
+            handlerResult != null &&
+            lastOutput &&
+            typeof lastOutput === "object"
+          ) {
+            lastOutput = { ...lastOutput, output: handlerResult };
+          }
         } catch (err) {
           if (state.output_handler.required) {
             throw err;
@@ -721,7 +747,7 @@ async function executeState(
         // ParallelAgents has no single agent execution — pass empty string
         // so the orchestrator spawns a standalone output handler execution.
         try {
-          await executeOutputHandlerActivity({
+          const handlerResult = await executeOutputHandlerActivity({
             executionId: "",
             tenantId: (blackboard.tenant_id as string) ?? "",
             finalOutput:
@@ -730,6 +756,13 @@ async function executeState(
                 : JSON.stringify(parallelResult),
             handlerConfigJson: JSON.stringify(state.output_handler),
           });
+          if (
+            handlerResult != null &&
+            parallelResult &&
+            typeof parallelResult === "object"
+          ) {
+            parallelResult = { ...parallelResult, output: handlerResult };
+          }
         } catch (err) {
           if (state.output_handler.required) {
             throw err;
@@ -829,7 +862,7 @@ async function executeState(
         });
       }
 
-      const crStateResult = {
+      const crStateResult: ContainerRunStateResult = {
         status: crResult.exit_code === 0 ? "success" : "failed",
         output: {
           exit_code: crResult.exit_code,
@@ -849,12 +882,16 @@ async function executeState(
         // ContainerRun has no agent execution — pass empty string so the
         // orchestrator spawns a standalone output handler execution.
         try {
-          await executeOutputHandlerActivity({
+          const handlerResult = await executeOutputHandlerActivity({
             executionId: "",
             tenantId: (blackboard.tenant_id as string) ?? "",
             finalOutput: JSON.stringify(crStateResult),
             handlerConfigJson: JSON.stringify(state.output_handler),
           });
+          if (handlerResult != null) {
+            crStateResult.stdout = handlerResult;
+            crStateResult.output.stdout = handlerResult;
+          }
         } catch (err) {
           if (state.output_handler.required) {
             throw err;
@@ -1186,6 +1223,65 @@ function renderTemplate(tmpl: string, ctx: any): string {
   // causing downstream agents to receive truncated or empty inputs.
   const enrichedCtx = { ...ctx, blackboard: ctx };
   return Handlebars.compile(tmpl)(enrichedCtx);
+}
+
+/**
+ * Recursively walk an output_template object, rendering Handlebars leaf strings
+ * against the blackboard and coercing values according to output_schema types.
+ */
+function evaluateOutputTemplate(
+  template: Record<string, any>,
+  schema: Record<string, any> | undefined,
+  blackboard: Record<string, any>,
+): Record<string, any> {
+  function coerce(
+    rendered: string,
+    propSchema: Record<string, any> | undefined,
+  ): any {
+    if (!propSchema || !propSchema.type) return rendered;
+    switch (propSchema.type) {
+      case "string":
+        return rendered;
+      case "integer":
+        return parseInt(rendered, 10);
+      case "number":
+        return parseFloat(rendered);
+      case "boolean":
+        return rendered === "true";
+      case "object":
+      case "array":
+        return JSON.parse(rendered);
+      default:
+        return rendered;
+    }
+  }
+
+  function walk(node: any, schemaNode: Record<string, any> | undefined): any {
+    if (typeof node === "string") {
+      return renderTemplate(node, blackboard);
+    }
+    if (Array.isArray(node)) {
+      return node.map((item) => walk(item, undefined));
+    }
+    if (node !== null && typeof node === "object") {
+      const result: Record<string, any> = {};
+      for (const [key, value] of Object.entries(node)) {
+        const propSchema = schemaNode?.properties?.[key] as
+          | Record<string, any>
+          | undefined;
+        if (typeof value === "string") {
+          const rendered = renderTemplate(value, blackboard);
+          result[key] = propSchema ? coerce(rendered, propSchema) : rendered;
+        } else {
+          result[key] = walk(value, propSchema);
+        }
+      }
+      return result;
+    }
+    return node;
+  }
+
+  return walk(template, schema) as Record<string, any>;
 }
 
 function parseTimeout(str: string): number {
