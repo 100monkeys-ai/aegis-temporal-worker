@@ -108,6 +108,12 @@ interface GenericWorkflowInput {
   security_context_name?: string;
   /** When this workflow is invoked as a child, the parent's execution ID. */
   parent_execution_id?: string;
+  /** ADR-113: structured references to files attached at dispatch time.
+   * Surfaced into the blackboard as `attachments` so workflow templates can
+   * reach them via `{{attachments}}`, threaded into agent gRPC calls as
+   * ExecuteAgentRequest.attachments, and merged into INTENT_INPUTS env for
+   * ContainerRun states (ADR-087 three-layer hydration). */
+  attachments?: import("../types.js").AttachmentRef[];
 }
 
 /**
@@ -127,7 +133,12 @@ export async function aegis_workflow(
     blackboard: blackboardOverridesArg,
     tenant_id,
     security_context_name,
+    attachments: argsAttachments,
   } = args;
+  // ADR-113: dispatch-time attachments. Empty array when the dispatch carries
+  // none — keeps Handlebars context shape stable so `{{#each attachments}}`
+  // doesn't blow up on undefined.
+  const attachments = argsAttachments ?? [];
   let blackboardOverrides = blackboardOverridesArg;
   const info = workflowInfo();
   const executionId = info.workflowId; // In AEGIS, Temporal workflowId is the Execution UUID
@@ -203,12 +214,21 @@ export async function aegis_workflow(
   }
 
   // 2. Initialize Blackboard (ADR-092: intent + input namespace)
+  // ADR-113: surface dispatch-time attachments at three layers:
+  //   1. Top-level `{{attachments}}` for Handlebars iteration.
+  //   2. `input.attachments` so the existing ADR-092 INTENT_INPUTS fallback
+  //      (which serializes `blackboard.input`) carries them into the
+  //      ContainerRun env without per-state plumbing.
+  //   3. Threaded onto Agent state's executeAgentActivity gRPC call below.
+  const inputWithAttachments: Record<string, any> =
+    attachments.length > 0 ? { ...input, attachments } : input;
   const blackboard: Blackboard = {
     ...definition.context,
     ...(blackboardOverrides ?? {}),
     tenant_id: resolvedTenantId,
     intent: argsIntent ?? "",
-    input: input,
+    input: inputWithAttachments,
+    attachments,
     workflow: {
       name: definition.name,
       version: definition.version,
@@ -559,6 +579,11 @@ async function executeState(
               : undefined,
             workspaceRemotePath,
             temperature: state.temperature,
+            // ADR-113: forward dispatch-time attachments to the runtime so
+            // ExecuteAgentRequest.attachments lands on the gRPC call.
+            attachments: Array.isArray(blackboard.attachments)
+              ? (blackboard.attachments as import("../types.js").AttachmentRef[])
+              : undefined,
           });
 
           lastOutput = result;

@@ -1721,3 +1721,161 @@ describe("max_state_visits and max_total_transitions", () => {
     expect(result.iterations).toBe(3);
   });
 });
+
+describe("ADR-113 attachment hydration", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    for (const fn of Object.values(terminalActivityMocks)) {
+      fn.mockReset();
+    }
+    executeAgentRpcMock.mockReset();
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+  });
+
+  const sampleAttachments = [
+    {
+      volume_id: "chat-attachments",
+      path: "uploads/2026-04/abc.pdf",
+      name: "abc.pdf",
+      mime_type: "application/pdf",
+      size: 12345,
+      sha256: "deadbeef",
+    },
+  ];
+
+  it("threads attachments onto Agent state's executeAgentActivity call", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          ANALYZE: {
+            kind: "Agent",
+            agent: "doc-analyzer",
+            input: "Analyze the attached docs",
+            transitions: [],
+          },
+        },
+        "ANALYZE",
+      ),
+    );
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "completed",
+      output: "ok",
+      iterations: 1,
+    });
+
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {},
+      attachments: sampleAttachments,
+    });
+
+    expect(activityMocks.executeAgentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: sampleAttachments,
+      }),
+    );
+  });
+
+  it("merges attachments into INTENT_INPUTS env for ContainerRun states", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          EXECUTE: {
+            kind: "ContainerRun",
+            container_run_name: "run",
+            container_run_image: "python:3.12-slim",
+            container_run_command: ["python3", "/workspace/solution.py"],
+            transitions: [],
+          },
+        },
+        "EXECUTE",
+      ),
+    );
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      duration_ms: 50,
+      attempts: 1,
+    });
+
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { language: "python" },
+      attachments: sampleAttachments,
+    });
+
+    const call = activityMocks.executeContainerRunActivity.mock.calls[0][0];
+    const intentInputs = JSON.parse(call.env.INTENT_INPUTS);
+    expect(intentInputs.attachments).toEqual(sampleAttachments);
+    expect(intentInputs.language).toBe("python");
+  });
+
+  it("renders {{attachments}} in Handlebars context for Agent input templates", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          ANALYZE: {
+            kind: "Agent",
+            agent: "doc-analyzer",
+            input: "Files: {{{json attachments}}}",
+            transitions: [],
+          },
+        },
+        "ANALYZE",
+      ),
+    );
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "completed",
+      output: "ok",
+      iterations: 1,
+    });
+
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {},
+      attachments: sampleAttachments,
+    });
+
+    const call = activityMocks.executeAgentActivity.mock.calls[0][0];
+    expect(call.input).toBe(`Files: ${JSON.stringify(sampleAttachments)}`);
+  });
+
+  it("omits attachments from gRPC request when dispatch carries none", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          ANALYZE: {
+            kind: "Agent",
+            agent: "123e4567-e89b-12d3-a456-426614174000",
+            input: "no attachments here",
+            transitions: [],
+          },
+        },
+        "ANALYZE",
+      ),
+    );
+    const actualActivities = await vi.importActual<
+      typeof import("../activities/index.js")
+    >("../activities/index.js");
+    activityMocks.executeAgentActivity.mockImplementation(
+      actualActivities.executeAgentActivity,
+    );
+    executeAgentRpcMock.mockResolvedValue([
+      {
+        event_type: "ExecutionCompleted",
+        execution_id: "child-exec-1",
+        timestamp: "2026-03-22T08:32:12.572760Z",
+        final_output: "ok",
+        total_iterations: 1,
+      },
+    ]);
+
+    await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    const request = executeAgentRpcMock.mock.calls[0][0];
+    expect(request.attachments).toBeUndefined();
+  });
+});

@@ -437,6 +437,27 @@ export interface ConsensusResult {
  */
 
 /**
+ * Structured reference to a file attached at dispatch time (ADR-113).
+ * Mirrors the protobuf message AttachmentRef in aegis_runtime.proto.
+ * Carried on ExecuteAgentRequest so attachments are deterministic at
+ * dispatch time per ADR-092 and never LLM-mediated.
+ */
+export interface AttachmentRef {
+  /** Tenant-scoped volume containing the file. */
+  volume_id: string;
+  /** Path within the volume. */
+  path: string;
+  /** Display name of the attachment. */
+  name: string;
+  /** MIME type as detected at upload time. */
+  mime_type: string;
+  /** Size in bytes. */
+  size: number;
+  /** Optional content hash for integrity checking. */
+  sha256?: string;
+}
+
+/**
  * Request to execute an agent
  */
 export interface ExecuteAgentRequest {
@@ -478,6 +499,12 @@ export interface ExecuteAgentRequest {
   /** Per-agent LLM temperature override (0.0–2.0). Threaded into the
    *  orchestrator's GenerationOptions when present. */
   temperature?: number;
+  /** Structured references to files attached at dispatch time (ADR-113).
+   * Maps to proto field attachments (field 13). Each entry points to a file
+   * in a tenant-scoped volume that the agent may read via the
+   * aegis.attachment.read tool. Empty/omitted when the dispatch carries no
+   * attachments. */
+  attachments?: AttachmentRef[];
 }
 
 /**

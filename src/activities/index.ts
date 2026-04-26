@@ -137,6 +137,10 @@ export async function executeAgentActivity(params: {
   workspaceVolumeMountPath?: string;
   workspaceRemotePath?: string;
   temperature?: number;
+  /** ADR-113: structured attachment refs carried on the dispatch. Forwarded
+   * to the runtime as ExecuteAgentRequest.attachments so the agent can read
+   * the files via the aegis.attachment.read tool. */
+  attachments?: import("../types.js").AttachmentRef[];
 }): Promise<any> {
   logger.info({ agent_id: params.agentId }, "Executing agent activity");
 
@@ -176,6 +180,9 @@ export async function executeAgentActivity(params: {
   }
   if (params.temperature !== undefined) {
     request.temperature = params.temperature;
+  }
+  if (params.attachments && params.attachments.length > 0) {
+    request.attachments = params.attachments;
   }
 
   try {

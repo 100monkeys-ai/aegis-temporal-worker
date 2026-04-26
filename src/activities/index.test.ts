@@ -225,6 +225,83 @@ describe("Temporal activities", () => {
     expect(request.tenant_id).toBe("tenant-abc");
   });
 
+  // ADR-113: structured attachment refs must land on ExecuteAgentRequest.attachments
+  it("forwards non-empty attachments onto the gRPC request", async () => {
+    executeAgentMock.mockResolvedValue([
+      {
+        event_type: "ExecutionCompleted",
+        execution_id: "child-exec-attachments",
+        timestamp: "2026-04-26T00:00:00.000Z",
+        final_output: "ok",
+        total_iterations: 1,
+      },
+    ]);
+
+    const attachments = [
+      {
+        volume_id: "chat-attachments",
+        path: "uploads/2026-04/abc.pdf",
+        name: "abc.pdf",
+        mime_type: "application/pdf",
+        size: 12345,
+        sha256: "deadbeef",
+      },
+    ];
+
+    await executeAgentActivity({
+      agentId: "123e4567-e89b-12d3-a456-426614174000",
+      input: "task",
+      context: {},
+      attachments,
+    });
+
+    const request = executeAgentMock.mock.calls[0][0];
+    expect(request.attachments).toEqual(attachments);
+  });
+
+  it("omits attachments from the gRPC request when none are provided", async () => {
+    executeAgentMock.mockResolvedValue([
+      {
+        event_type: "ExecutionCompleted",
+        execution_id: "child-exec-no-attachments",
+        timestamp: "2026-04-26T00:00:00.000Z",
+        final_output: "ok",
+        total_iterations: 1,
+      },
+    ]);
+
+    await executeAgentActivity({
+      agentId: "123e4567-e89b-12d3-a456-426614174000",
+      input: "task",
+      context: {},
+    });
+
+    const request = executeAgentMock.mock.calls[0][0];
+    expect(request.attachments).toBeUndefined();
+  });
+
+  it("omits attachments from the gRPC request when an empty array is provided", async () => {
+    executeAgentMock.mockResolvedValue([
+      {
+        event_type: "ExecutionCompleted",
+        execution_id: "child-exec-empty-attachments",
+        timestamp: "2026-04-26T00:00:00.000Z",
+        final_output: "ok",
+        total_iterations: 1,
+      },
+    ]);
+
+    await executeAgentActivity({
+      agentId: "123e4567-e89b-12d3-a456-426614174000",
+      input: "task",
+      context: {},
+      attachments: [],
+    });
+
+    const request = executeAgentMock.mock.calls[0][0];
+    expect(request.attachments).toBeUndefined();
+  });
+
   it("does not read tenant_id from Blackboard context when tenantId param is provided", async () => {
     executeAgentMock.mockResolvedValue([
       {
