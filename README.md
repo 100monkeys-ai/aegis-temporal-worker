@@ -89,6 +89,8 @@ All configuration is via environment variables. See [`.env.example`](.env.exampl
 | `AEGIS_RUNTIME_GRPC_URL` | `localhost:50051`                         | Rust AegisRuntime gRPC address                         |
 | `AEGIS_ORCHESTRATOR_URL` | `http://localhost:8088`                   | Rust orchestrator HTTP (for event callbacks)           |
 | `HTTP_PORT`              | `3000`                                    | Worker HTTP API port                                   |
+| `METRICS_PORT`           | `9094`                                    | Prometheus `/metrics` endpoint port (separate listener from the registration API on `HTTP_PORT`) |
+| `METRICS_BIND`           | `127.0.0.1`                               | Metrics listener bind address; set to `0.0.0.0` in deployment manifests so Prometheus can scrape across the pod network |
 | `PROTO_PATH`             | `./aegis-proto/proto/aegis_runtime.proto` | Path to gRPC proto file                                |
 | `LOG_LEVEL`              | `info`                                    | Pino log level (`trace`/`debug`/`info`/`warn`/`error`) |
 | `NODE_ENV`               | `development`                             | Environment (`development`/`production`)               |
