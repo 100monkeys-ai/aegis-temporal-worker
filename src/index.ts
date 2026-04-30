@@ -8,6 +8,7 @@ import { config } from "./config.js";
 import { database } from "./database.js";
 import { startServer } from "./server.js";
 import { startWorker } from "./worker.js";
+import { startMetricsServer } from "./observability/metrics.js";
 
 async function main() {
   logger.info("Starting AEGIS Temporal Worker...");
@@ -16,6 +17,10 @@ async function main() {
   try {
     // Connect to database
     await database.connect();
+
+    // Start Prometheus metrics listener on its own port (9094) — separate
+    // from the workflow registration API.
+    startMetricsServer();
 
     // Start HTTP server for workflow registration
     startServer();

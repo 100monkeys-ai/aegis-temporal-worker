@@ -6,7 +6,34 @@
 import { NativeConnection, Worker } from "@temporalio/worker";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
-import * as activities from "./activities/index.js";
+import * as activitiesModule from "./activities/index.js";
+import { instrumentActivity } from "./observability/metrics.js";
+
+/**
+ * Wrap every exported activity function with Prometheus instrumentation.
+ * The label `activity` is the activity TYPE name — i.e. the export key the
+ * Temporal Worker registers — so cardinality stays bounded.
+ */
+function instrumentActivities(
+  source: Record<string, unknown>,
+): Record<string, unknown> {
+  const wrapped: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (typeof value === "function") {
+      wrapped[name] = instrumentActivity(
+        name,
+        value as (...args: unknown[]) => Promise<unknown>,
+      );
+    } else {
+      wrapped[name] = value;
+    }
+  }
+  return wrapped;
+}
+
+const activities = instrumentActivities(
+  activitiesModule as unknown as Record<string, unknown>,
+);
 
 export async function startWorker(): Promise<void> {
   logger.info("Initializing Temporal worker...");
