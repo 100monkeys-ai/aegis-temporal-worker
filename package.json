@@ -34,7 +34,7 @@
   "author": "100monkeys.ai",
   "license": "AGPL-3.0-only",
   "dependencies": {
-    "@grpc/grpc-js": "^1.14.3",
+    "@grpc/grpc-js": "^1.14.4",
     "@grpc/proto-loader": "^0.8.0",
     "@temporalio/activity": "^1.16.1",
     "@temporalio/client": "^1.16.1",
