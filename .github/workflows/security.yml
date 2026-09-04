@@ -16,8 +16,8 @@ jobs:
     name: NPM Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
       - run: npm audit --audit-level=moderate || true
@@ -30,8 +30,8 @@ jobs:
       security-events: write
       contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: github/codeql-action/init@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           languages: "javascript-typescript,actions"
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
