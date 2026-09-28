@@ -6,7 +6,12 @@
 # Temporal's SDK uses @temporalio/worker which ships native binaries that require glibc;
 # Alpine (musl) is incompatible and will fail at runtime.
 
-FROM node:25-slim AS builder
+# Node 24, the long-term-support line, in both stages. The version is
+# declared once, in .nvmrc; src/node-version.test.ts fails if this file
+# disagrees with it, and CI's Image job fails if the built image runs
+# another Node. The digest is the multi-platform index of node:24-slim as
+# read from Docker Hub on 2026-09-28: Node 24.21.0.
+FROM node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS builder
 
 WORKDIR /app
 
@@ -24,7 +29,7 @@ RUN npm run build
 
 # ─── Production image ────────────────────────────────────────────────────────
 
-FROM node:25-slim
+FROM node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
 
 WORKDIR /app
 

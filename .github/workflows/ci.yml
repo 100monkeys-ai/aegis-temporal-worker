@@ -19,7 +19,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "20"
+          node-version-file: ".nvmrc"
           cache: "npm"
 
       - name: Install dependencies
@@ -43,7 +43,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "20"
+          node-version-file: ".nvmrc"
           cache: "npm"
 
       - name: Install dependencies
@@ -51,3 +51,69 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+  image:
+    name: Image
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # The major version production runs; pinned by the digest of the
+        # multi-platform index, read from Docker Hub on 2026-09-28.
+        image: postgres:15-alpine@sha256:f7d23353e1b15400d22ebe31189f4d314b87a4c129cc400c8c2d8d4ca127bf81
+        env:
+          POSTGRES_USER: worker
+          POSTGRES_DB: worker
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U worker"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Build the image
+        run: docker build -t aegis-temporal-worker:ci .
+
+      - name: Install the Temporal CLIs
+        # CLI 0.12.0 bundles Temporal Server 1.23.0, the version production
+        # runs; its dev server is the server here. CLI 1.9.1 runs the client
+        # commands. The checksums are from each release's checksums.txt.
+        run: |
+          get() {
+            curl -fsSL -o "${RUNNER_TEMP}/temporal-$1.tar.gz" \
+              "https://github.com/temporalio/cli/releases/download/v$1/temporal_cli_$1_linux_amd64.tar.gz"
+            echo "$2  ${RUNNER_TEMP}/temporal-$1.tar.gz" | sha256sum -c -
+            mkdir -p "${RUNNER_TEMP}/temporal-$1"
+            tar -xzf "${RUNNER_TEMP}/temporal-$1.tar.gz" -C "${RUNNER_TEMP}/temporal-$1" temporal
+            "${RUNNER_TEMP}/temporal-$1/temporal" --version
+          }
+          get 0.12.0 5c4ac5de2b1aad12488501fbab75719e1f2ee1397b580dd862781a43f84f9b1f
+          get 1.9.1 09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5
+
+      - name: The image runs the Node in .nvmrc and runs a workflow to completion
+        env:
+          TEMPORAL_SERVER: ${{ runner.temp }}/temporal-0.12.0/temporal
+          TEMPORAL: ${{ runner.temp }}/temporal-1.9.1/temporal
+        run: .github/image-check/run.sh aegis-temporal-worker:ci
+
+      - name: Image size
+        run: docker image inspect aegis-temporal-worker:ci --format 'aegis-temporal-worker:ci {{.Size}} bytes'
+
+      - name: Image size of the base branch, for comparison
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --depth 1 origin "${BASE_SHA}"
+          git worktree add "${RUNNER_TEMP}/base" FETCH_HEAD
+          git -C "${RUNNER_TEMP}/base" submodule update --init --recursive
+          docker build -t aegis-temporal-worker:base "${RUNNER_TEMP}/base"
+          echo "base image Node $(docker run --rm aegis-temporal-worker:base node -p process.versions.node)"
+          docker image inspect aegis-temporal-worker:base --format 'aegis-temporal-worker:base {{.Size}} bytes'
