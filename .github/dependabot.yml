@@ -13,6 +13,13 @@ updates:
       - "javascript"
     commit-message:
       prefix: "chore(deps)"
+    ignore:
+      # Node is 24. Its types follow it.
+      - dependency-name: "@types/node"
+        versions: [">=25"]
+      # No typescript-eslint release accepts TypeScript 7 yet (8.71.0: <6.1.0).
+      - dependency-name: "typescript"
+        versions: [">=7"]
     groups:
       production-dependencies:
         dependency-type: "production"
@@ -50,3 +57,7 @@ updates:
       - "docker"
     commit-message:
       prefix: "chore(docker)"
+    ignore:
+      # Node is 24. The image follows it; 26 is refused.
+      - dependency-name: "node"
+        versions: [">=25"]
