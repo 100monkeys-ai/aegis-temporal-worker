@@ -8,6 +8,7 @@ import * as protoLoader from "@grpc/proto-loader";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { getServiceToken } from "../auth/token-manager.js";
+import { PROTO_LOADER_OPTIONS, PROTO_PATH } from "./proto-options.js";
 import type {
   ExecuteAgentRequest,
   ExecutionEvent,
@@ -28,18 +29,10 @@ import type {
 } from "../types.js";
 
 // Load protobuf definition
-// In Docker: /app/aegis-proto/proto/aegis_runtime.proto
-// In development (from repo root): ./aegis-proto/proto/aegis_runtime.proto
-const PROTO_PATH =
-  process.env.PROTO_PATH || "./aegis-proto/proto/aegis_runtime.proto";
-
-const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
-  keepCase: true,
-  longs: Number,
-  enums: String,
-  defaults: true,
-  oneofs: true,
-});
+const packageDefinition = protoLoader.loadSync(
+  PROTO_PATH,
+  PROTO_LOADER_OPTIONS,
+);
 
 const aegisProto = grpc.loadPackageDefinition(packageDefinition) as any;
 
