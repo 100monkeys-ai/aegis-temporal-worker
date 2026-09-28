@@ -1295,8 +1295,7 @@ function evaluateOutputTemplate(
       const result: Record<string, any> = {};
       for (const [key, value] of Object.entries(node)) {
         const propSchema = schemaNode?.properties?.[key] as
-          | Record<string, any>
-          | undefined;
+          Record<string, any> | undefined;
         if (typeof value === "string") {
           const rendered = renderTemplate(value, blackboard);
           result[key] = propSchema ? coerce(rendered, propSchema) : rendered;
