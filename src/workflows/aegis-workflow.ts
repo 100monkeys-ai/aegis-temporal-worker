@@ -1157,9 +1157,7 @@ async function evaluateTransitions(
   // had, and ending the run here would report it completed. Fail it instead.
   if (
     stateScore(stateOutput) === undefined &&
-    transitions.some(
-      (t) => t.condition === "score_above" || t.condition === "score_below",
-    )
+    transitions.some((t) => SCORE_CONDITIONS.has(t.condition))
   ) {
     throw new Error(
       `State "${stateName}" carries no score for its score transitions`,
@@ -1185,6 +1183,39 @@ function stateScore(output: any): number | undefined {
   }
   return undefined;
 }
+
+/**
+ * The confidence a state's output carries: `confidence` at its root, or
+ * `consensus.confidence` for a ParallelAgents state. Undefined when it
+ * carries none; a missing confidence is never read as 0.
+ */
+function stateConfidence(output: any): number | undefined {
+  return firstFinite(output?.confidence, output?.consensus?.confidence);
+}
+
+function firstFinite(...candidates: unknown[]): number | undefined {
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The conditions that route on a state's score. A state that declares any of
+ * them, carries no score and matches no other transition fails its run
+ * (AEGIS ADR-017, Update of 2026-10-02).
+ */
+const SCORE_CONDITIONS: ReadonlySet<TransitionRule["condition"]> = new Set<
+  TransitionRule["condition"]
+>([
+  "score_above",
+  "score_below",
+  "score_between",
+  "score_and_confidence_above",
+  "consensus",
+]);
 
 async function evaluateCondition(
   t: TransitionRule,
@@ -1233,25 +1264,35 @@ async function evaluateCondition(
       const s = stateScore(output);
       return s !== undefined && s < (t.threshold || 1);
     }
-    case "score_between":
-      const score = output?.score || output?.final_score || 0;
-      return score >= (t.min || 0) && score <= (t.max || 1);
+    case "score_between": {
+      const s = stateScore(output);
+      return s !== undefined && s >= (t.min || 0) && s <= (t.max || 1);
+    }
     case "confidence_above":
       return (output?.confidence || 0) > (t.threshold || 0);
-    case "score_and_confidence_above":
+    case "score_and_confidence_above": {
+      const s = stateScore(output);
+      const c = stateConfidence(output);
       return (
-        (output?.score || output?.final_score || 0) > (t.threshold || 0) &&
-        (output?.confidence || 0) > (t.threshold || 0)
+        s !== undefined &&
+        c !== undefined &&
+        s > (t.threshold || 0) &&
+        c > (t.threshold || 0)
       );
-    case "consensus":
-      const consensusScore =
-        output?.consensus?.score ?? output?.final_score ?? 0;
+    }
+    case "consensus": {
+      const consensusScore = firstFinite(
+        output?.consensus?.score,
+        output?.final_score,
+      );
       const consensusConfidence =
         output?.consensus?.confidence ?? output?.confidence ?? 0;
       return (
+        consensusScore !== undefined &&
         consensusScore >= (t.threshold || 0) &&
         consensusConfidence >= (t.agreement || 0)
       );
+    }
     case "all_approved":
       return (
         Array.isArray(output?.individual_scores) &&

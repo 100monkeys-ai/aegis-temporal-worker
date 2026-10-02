@@ -2311,4 +2311,254 @@ describe("score transitions read the score a state carries", () => {
     expect(result.status).toBe("completed");
     expect(result.final_state).toBe("OTHER");
   });
+
+  describe("score_between, score_and_confidence_above and consensus read a missing score as absent", () => {
+    function agentState(
+      transitions: TemporalWorkflowDefinition["states"][string]["transitions"],
+      output: Record<string, unknown>,
+    ) {
+      activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+        baseDefinition(
+          {
+            CHECK: {
+              kind: "Agent",
+              agent: "checker",
+              input: "check",
+              transitions,
+            },
+            ...terminals,
+          },
+          "CHECK",
+        ),
+      );
+      activityMocks.executeAgentActivity.mockResolvedValue({
+        status: "completed",
+        output: "checked",
+        iterations: 1,
+        ...output,
+      });
+    }
+
+    function panelState(
+      transitions: TemporalWorkflowDefinition["states"][string]["transitions"],
+      consensus: Record<string, unknown>,
+    ) {
+      activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+        baseDefinition(
+          {
+            PANEL: {
+              kind: "ParallelAgents",
+              agents: [
+                { agent: "judge-a", input: "{}", weight: 1.0 },
+                { agent: "judge-b", input: "{}", weight: 1.0 },
+              ],
+              consensus: { strategy: "weighted_average", threshold: 0.8 },
+              transitions,
+            },
+            ...terminals,
+          },
+          "PANEL",
+        ),
+      );
+      activityMocks.executeParallelAgentsActivity.mockResolvedValue({
+        consensus,
+      });
+    }
+
+    const noScoreError = (state: string) =>
+      `State "${state}" carries no score for its score transitions`;
+
+    it("score_between does not match a state that carries no score", async () => {
+      agentState(
+        [
+          { condition: "score_between", min: 0, max: 0.5, target: "FAILED" },
+          { condition: "on_success", target: "OTHER" },
+        ],
+        {},
+      );
+
+      const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+      expect(result.error).toBeUndefined();
+      expect(result.final_state).toBe("OTHER");
+    });
+
+    it.each([
+      [0.3, "FAILED"],
+      [0.9, "OTHER"],
+    ])(
+      "score_between reads a score of %s as today",
+      async (score, expected) => {
+        agentState(
+          [
+            { condition: "score_between", min: 0, max: 0.5, target: "FAILED" },
+            { condition: "on_success", target: "OTHER" },
+          ],
+          { score },
+        );
+
+        const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+        expect(result.final_state).toBe(expected);
+      },
+    );
+
+    it.each([
+      ["no score", { confidence: 0.9 }],
+      ["no confidence", { score: 0.9 }],
+      ["neither", {}],
+    ])(
+      "score_and_confidence_above does not match a state with %s",
+      async (_kind, output) => {
+        agentState(
+          [
+            {
+              condition: "score_and_confidence_above",
+              threshold: 0,
+              target: "DONE",
+            },
+            { condition: "on_success", target: "OTHER" },
+          ],
+          output,
+        );
+
+        const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+        expect(result.error).toBeUndefined();
+        expect(result.final_state).toBe("OTHER");
+      },
+    );
+
+    it.each([
+      [{ score: 0.9, confidence: 0.9 }, "DONE"],
+      [{ score: 0.6, confidence: 0.9 }, "OTHER"],
+      [{ score: 0.9, confidence: 0.6 }, "OTHER"],
+      [{ final_score: 0.9, confidence: 0.9 }, "DONE"],
+    ])(
+      "score_and_confidence_above reads %j as today",
+      async (output, expected) => {
+        agentState(
+          [
+            {
+              condition: "score_and_confidence_above",
+              threshold: 0.7,
+              target: "DONE",
+            },
+            { condition: "on_success", target: "OTHER" },
+          ],
+          output,
+        );
+
+        const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+        expect(result.final_state).toBe(expected);
+      },
+    );
+
+    it("the consensus condition does not match a ParallelAgents state whose consensus has no score", async () => {
+      panelState(
+        [
+          { condition: "consensus", target: "DONE" },
+          { condition: "always", target: "OTHER" },
+        ],
+        {
+          strategy: "weighted_average",
+          metadata: { reasoning: "there is no score to combine" },
+        },
+      );
+
+      const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+      expect(result.error).toBeUndefined();
+      expect(result.final_state).toBe("OTHER");
+    });
+
+    it.each([
+      [{ score: 0.9, confidence: 0.8 }, "DONE"],
+      [{ score: 0.6, confidence: 0.8 }, "OTHER"],
+      [{ score: 0.9, confidence: 0.5 }, "OTHER"],
+    ])(
+      "the consensus condition reads a consensus of %j as today",
+      async (consensus, expected) => {
+        panelState(
+          [
+            {
+              condition: "consensus",
+              threshold: 0.8,
+              agreement: 0.7,
+              target: "DONE",
+            },
+            { condition: "always", target: "OTHER" },
+          ],
+          { ...consensus, strategy: "weighted_average" },
+        );
+
+        const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+        expect(result.final_state).toBe(expected);
+      },
+    );
+
+    it("score_between and score_and_confidence_above read a ParallelAgents state's consensus score and confidence", async () => {
+      panelState(
+        [
+          { condition: "score_between", min: 0, max: 0.5, target: "FAILED" },
+          {
+            condition: "score_and_confidence_above",
+            threshold: 0.7,
+            target: "DONE",
+          },
+          { condition: "always", target: "OTHER" },
+        ],
+        { score: 0.9, confidence: 0.8, strategy: "weighted_average" },
+      );
+
+      const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+      expect(result.final_state).toBe("DONE");
+    });
+
+    it("fails the run, naming the state, when it declares only score_between and carries no score", async () => {
+      agentState(
+        [{ condition: "score_between", min: 0, max: 0.5, target: "FAILED" }],
+        {},
+      );
+
+      const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+      expect(result.error).toBe(noScoreError("CHECK"));
+      expect(result.status).toBe("failed");
+      expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
+    });
+
+    it("fails the run, naming the state, when it declares only score_and_confidence_above and carries no score", async () => {
+      agentState(
+        [
+          {
+            condition: "score_and_confidence_above",
+            threshold: 0.7,
+            target: "DONE",
+          },
+        ],
+        { confidence: 0.9 },
+      );
+
+      const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+      expect(result.error).toBe(noScoreError("CHECK"));
+      expect(result.status).toBe("failed");
+    });
+
+    it("fails the run, naming the state, when it declares only the consensus condition and its consensus has no score", async () => {
+      panelState([{ condition: "consensus", target: "DONE" }], {
+        strategy: "weighted_average",
+      });
+
+      const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+      expect(result.error).toBe(noScoreError("PANEL"));
+      expect(result.status).toBe("failed");
+      expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
+    });
+  });
 });
