@@ -14,6 +14,8 @@ const { activityMocks, terminalActivityMocks, executeAgentRpcMock } =
       executeContainerRunActivity: vi.fn(),
       executeParallelContainerRunActivity: vi.fn(),
       executeOutputHandlerActivity: vi.fn(),
+      createEphemeralWorkspaceActivity: vi.fn(),
+      destroyWorkspaceVolumeActivity: vi.fn(),
     },
     terminalActivityMocks: {
       executeAgentActivity: vi.fn(),
@@ -57,6 +59,7 @@ vi.mock("@temporalio/workflow", () => ({
   defineSignal: vi.fn(() => Symbol("humanInput")),
   condition: vi.fn(async (predicate: () => boolean) => predicate()),
   workflowInfo: vi.fn(() => ({ workflowId: "exec-123" })),
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 import { aegis_workflow } from "./aegis-workflow.js";
@@ -1719,6 +1722,160 @@ describe("max_state_visits and max_total_transitions", () => {
     expect(result.status).toBe("failed");
     expect(result.error).toBe("Max iterations exceeded");
     expect(result.iterations).toBe(3);
+  });
+
+  function emittedEventTypes(): string[] {
+    return activityMocks.publishEventActivity.mock.calls.map(
+      (call) => call[0].event_type,
+    );
+  }
+
+  function failedEvents(): any[] {
+    return activityMocks.publishEventActivity.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.event_type === "WorkflowExecutionFailed");
+  }
+
+  it("ends a run that exceeds max_state_visits with exactly one WorkflowExecutionFailed, after the visit-limit event and the workspace's destruction", async () => {
+    // Production, 2026-10-01: execution 6054290c reached its third visit to
+    // EXECUTION_FAILED (max 2); the worker emitted only
+    // WorkflowStateVisitLimitExceeded, so the orchestrator's record stayed
+    // running.
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue({
+      ...baseDefinition(
+        {
+          A: {
+            kind: "System",
+            command: "echo a",
+            max_state_visits: 2,
+            transitions: [{ condition: "always", target: "B" }],
+          },
+          B: {
+            kind: "System",
+            command: "echo b",
+            transitions: [{ condition: "always", target: "A" }],
+          },
+        },
+        "A",
+      ),
+      spec_storage: { workspace: { storage_class: "ephemeral" } },
+    });
+    activityMocks.createEphemeralWorkspaceActivity.mockResolvedValue({
+      volume_id: "vol-1",
+      remote_path: "/remote/vol-1",
+    });
+    activityMocks.destroyWorkspaceVolumeActivity.mockResolvedValue(undefined);
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("failed");
+    const types = emittedEventTypes();
+    const limitIndex = types.indexOf("WorkflowStateVisitLimitExceeded");
+    const failedIndex = types.indexOf("WorkflowExecutionFailed");
+    expect(limitIndex).toBeGreaterThanOrEqual(0);
+    expect(failedIndex).toBeGreaterThan(limitIndex);
+    expect(failedIndex).toBe(types.length - 1);
+
+    const failed = failedEvents();
+    expect(failed).toHaveLength(1);
+    expect(failed[0].error).toBe(
+      'State "A" exceeded max_state_visits limit of 2',
+    );
+    expect(failed[0].error).toBe(result.output?.error);
+
+    expect(activityMocks.destroyWorkspaceVolumeActivity).toHaveBeenCalledTimes(
+      1,
+    );
+    const destroyOrder =
+      activityMocks.destroyWorkspaceVolumeActivity.mock.invocationCallOrder[0];
+    const publishOrders =
+      activityMocks.publishEventActivity.mock.invocationCallOrder;
+    expect(destroyOrder).toBeGreaterThan(publishOrders[limitIndex]);
+    expect(publishOrders[failedIndex]).toBeGreaterThan(destroyOrder);
+  });
+
+  it("still emits WorkflowExecutionFailed on a visit-limit run whose workspace destruction fails", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue({
+      ...baseDefinition(
+        {
+          A: {
+            kind: "System",
+            command: "echo a",
+            max_state_visits: 1,
+            transitions: [{ condition: "always", target: "A" }],
+          },
+        },
+        "A",
+      ),
+      spec_storage: { workspace: { storage_class: "ephemeral" } },
+    });
+    activityMocks.createEphemeralWorkspaceActivity.mockResolvedValue({
+      volume_id: "vol-1",
+    });
+    activityMocks.destroyWorkspaceVolumeActivity.mockRejectedValue(
+      new Error("storage unavailable"),
+    );
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("failed");
+    const failed = failedEvents();
+    expect(failed).toHaveLength(1);
+    expect(failed[0].error).toBe(
+      'State "A" exceeded max_state_visits limit of 1',
+    );
+  });
+
+  it("emits exactly one WorkflowExecutionFailed when max_total_transitions is exceeded", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue({
+      ...baseDefinition(
+        {
+          A: {
+            kind: "System",
+            command: "echo a",
+            max_state_visits: 20,
+            transitions: [{ condition: "always", target: "A" }],
+          },
+        },
+        "A",
+      ),
+      max_total_transitions: 3,
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("failed");
+    const failed = failedEvents();
+    expect(failed).toHaveLength(1);
+    expect(failed[0].error).toBe("Max iterations exceeded");
+    expect(emittedEventTypes()).not.toContain(
+      "WorkflowStateVisitLimitExceeded",
+    );
+  });
+
+  it("emits exactly one WorkflowExecutionFailed when a state's activity fails", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          A: {
+            kind: "System",
+            command: "echo a",
+            transitions: [],
+          },
+        },
+        "A",
+      ),
+    );
+    activityMocks.executeSystemCommandActivity.mockRejectedValue(
+      new Error("command crashed"),
+    );
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("failed");
+    const failed = failedEvents();
+    expect(failed).toHaveLength(1);
+    expect(failed[0].error).toBe("command crashed");
   });
 });
 

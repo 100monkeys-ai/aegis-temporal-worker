@@ -288,10 +288,17 @@ export async function aegis_workflow(
           );
         }
       }
+      // The visit-limit event is informational; WorkflowExecutionFailed is the
+      // terminal event the orchestrator ends the execution's record on.
+      const visitLimitError = `State "${currentState}" exceeded max_state_visits limit of ${effectiveMaxVisits}`;
+      await emit("WorkflowExecutionFailed", {
+        error: visitLimitError,
+        final_blackboard: blackboard,
+      });
       return {
         status: "failed" as const,
         output: {
-          error: `State "${currentState}" exceeded max_state_visits limit of ${effectiveMaxVisits}`,
+          error: visitLimitError,
         },
         iterations: iterationCount,
         final_state: currentState,
