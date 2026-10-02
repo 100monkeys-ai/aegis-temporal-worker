@@ -2191,6 +2191,97 @@ describe("score transitions read the score a state carries", () => {
     expect(failed[0].error).toBe(expectedError);
   });
 
+  describe("an Agent state carries its agent's score", () => {
+    function agentDefinition() {
+      return baseDefinition(
+        {
+          PARSE_AND_VALIDATE: {
+            kind: "Agent",
+            agent: "123e4567-e89b-12d3-a456-426614174000",
+            input: "validate",
+            transitions: [
+              { condition: "score_above", threshold: 0.7, target: "NEXT" },
+              { condition: "score_below", threshold: 0.7, target: "FAILED" },
+            ],
+          },
+          NEXT: { kind: "System", command: "echo next", transitions: [] },
+          ...terminals,
+        },
+        "PARSE_AND_VALIDATE",
+      );
+    }
+
+    async function runWithFinalOutput(finalOutput: string) {
+      const actualActivities = await vi.importActual<
+        typeof import("../activities/index.js")
+      >("../activities/index.js");
+      activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+        agentDefinition(),
+      );
+      activityMocks.executeAgentActivity.mockImplementation(
+        actualActivities.executeAgentActivity,
+      );
+      executeAgentRpcMock.mockResolvedValue([
+        {
+          event_type: "ExecutionCompleted",
+          execution_id: "child-exec-1",
+          timestamp: "2026-10-02T06:30:00Z",
+          final_output: finalOutput,
+          total_iterations: 1,
+        },
+      ]);
+      return aegis_workflow({ workflow_id: "wf-1", input: {} });
+    }
+
+    it("routes by score_above to NEXT when the agent returns a JSON object with score 0.9", async () => {
+      const result = await runWithFinalOutput(
+        JSON.stringify({ score: 0.9, summary: "valid skill" }),
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe("completed");
+      expect(result.final_state).toBe("NEXT");
+      expect(result.blackboard?.PARSE_AND_VALIDATE?.score).toBe(0.9);
+      expect(result.blackboard?.PARSE_AND_VALIDATE?.output?.summary).toBe(
+        "valid skill",
+      );
+    });
+
+    it("routes by score_below to FAILED when the agent returns a JSON object with score 0.3", async () => {
+      const result = await runWithFinalOutput(
+        "```json\n" + JSON.stringify({ score: 0.3 }) + "\n```",
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe("completed");
+      expect(result.final_state).toBe("FAILED");
+      expect(result.blackboard?.PARSE_AND_VALIDATE?.score).toBe(0.3);
+    });
+
+    it.each([
+      ["text", "The skill looks valid, score 0.9"],
+      ["an object without a score", JSON.stringify({ quality_score: 0.9 })],
+      ["a score that is not a number", JSON.stringify({ score: "0.9" })],
+      ["a score above 1.0", JSON.stringify({ score: 1.5 })],
+      ["a score below 0.0", JSON.stringify({ score: -0.1 })],
+      ["an array", JSON.stringify([{ score: 0.9 }])],
+    ])(
+      "carries no score when the agent returns %s, and the run fails naming the state",
+      async (_kind, finalOutput) => {
+        const result = await runWithFinalOutput(finalOutput);
+
+        expect(result.status).toBe("failed");
+        expect(result.error).toBe(
+          'State "PARSE_AND_VALIDATE" carries no score for its score transitions',
+        );
+        expect(result.final_state).toBe("PARSE_AND_VALIDATE");
+        expect(
+          activityMocks.executeSystemCommandActivity,
+        ).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   it("takes another matching transition when a state carries no score", async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue(
       baseDefinition(

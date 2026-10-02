@@ -122,6 +122,18 @@ function normalizeAgentOutput(finalOutput: string | undefined): unknown {
 }
 
 /**
+ * The score an agent's normalized final output carries: its `score` when the
+ * output is a JSON object whose `score` is a number from 0.0 to 1.0.
+ * Undefined otherwise; a missing score is never read as 0.
+ */
+function agentOutputScore(output: unknown): number | undefined {
+  if (!output || typeof output !== "object" || Array.isArray(output)) {
+    return undefined;
+  }
+  return unitInterval((output as Record<string, unknown>).score);
+}
+
+/**
  * Execute an agent via Rust ExecutionService
  */
 export async function executeAgentActivity(params: {
@@ -196,11 +208,17 @@ export async function executeAgentActivity(params: {
     const failedEvent = events.find((e) => e.event_type === "ExecutionFailed");
 
     if (completedEvent) {
+      const output = normalizeAgentOutput(completedEvent.final_output);
+      const score = agentOutputScore(output);
       return {
         status: "completed",
-        output: normalizeAgentOutput(completedEvent.final_output),
+        output,
         iterations: completedEvent.total_iterations || 0,
         execution_id: completedEvent.execution_id || undefined,
+        // The state carries its agent's score so that score transitions can
+        // read it (AEGIS ADR-017, Update of 2026-10-02). An output that is
+        // not a JSON object with a numeric score from 0.0 to 1.0 carries none.
+        ...(score === undefined ? {} : { score }),
       };
     }
 

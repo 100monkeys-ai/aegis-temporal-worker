@@ -89,6 +89,54 @@ describe("Temporal activities", () => {
     expect(request.parent_execution_id).toBeUndefined();
   });
 
+  it.each([
+    ["a JSON object with score 0.9", JSON.stringify({ score: 0.9 }), 0.9],
+    ["a JSON object with score 0", JSON.stringify({ score: 0 }), 0],
+    ["a JSON object with score 1", JSON.stringify({ score: 1 }), 1],
+    [
+      "a fenced JSON object with score 0.3",
+      "```json\n" + JSON.stringify({ score: 0.3, reasoning: "thin" }) + "\n```",
+      0.3,
+    ],
+    ["text", "score: 0.9", undefined],
+    [
+      "an object without score",
+      JSON.stringify({ quality_score: 0.9 }),
+      undefined,
+    ],
+    ["a string score", JSON.stringify({ score: "0.9" }), undefined],
+    ["a score above 1.0", JSON.stringify({ score: 1.5 }), undefined],
+    ["a score below 0.0", JSON.stringify({ score: -0.1 }), undefined],
+    ["a null score", JSON.stringify({ score: null }), undefined],
+    ["an array", JSON.stringify([{ score: 0.9 }]), undefined],
+  ])(
+    "carries the agent's score when its final output is %s",
+    async (_kind, finalOutput, expected) => {
+      executeAgentMock.mockResolvedValue([
+        {
+          event_type: "ExecutionCompleted",
+          execution_id: "child-exec-1",
+          timestamp: "2026-10-02T06:30:00Z",
+          final_output: finalOutput,
+          total_iterations: 1,
+        },
+      ]);
+
+      const result = await executeAgentActivity({
+        agentId: "123e4567-e89b-12d3-a456-426614174000",
+        input: "validate",
+        context: {},
+      });
+
+      expect(result.status).toBe("completed");
+      if (expected === undefined) {
+        expect(result).not.toHaveProperty("score");
+      } else {
+        expect(result.score).toBe(expected);
+      }
+    },
+  );
+
   it("returns completed result when the client synthesizes terminal completion from persisted state", async () => {
     executeAgentMock.mockResolvedValue([
       {
