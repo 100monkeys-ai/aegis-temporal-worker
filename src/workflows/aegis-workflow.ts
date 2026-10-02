@@ -369,6 +369,7 @@ export async function aegis_workflow(
 
       // Transition
       currentState = await evaluateTransitions(
+        currentState,
         state.transitions,
         stateOutput,
         blackboard,
@@ -1141,6 +1142,7 @@ async function executeState(
 }
 
 async function evaluateTransitions(
+  stateName: string,
   transitions: TransitionRule[],
   stateOutput: any,
   blackboard: Blackboard,
@@ -1150,7 +1152,38 @@ async function evaluateTransitions(
       return t.target;
     }
   }
+  // A state that routes on its score but carries none has no route: reading
+  // the missing score as 0 would send it down score_below on a score it never
+  // had, and ending the run here would report it completed. Fail it instead.
+  if (
+    stateScore(stateOutput) === undefined &&
+    transitions.some(
+      (t) => t.condition === "score_above" || t.condition === "score_below",
+    )
+  ) {
+    throw new Error(
+      `State "${stateName}" carries no score for its score transitions`,
+    );
+  }
   return null;
+}
+
+/**
+ * The score a state's output carries, wherever it carries it: `score` or
+ * `final_score` at its root, or `consensus.score` for a ParallelAgents state.
+ * Undefined when it carries none; a missing score is never read as 0 or 1.
+ */
+function stateScore(output: any): number | undefined {
+  for (const candidate of [
+    output?.score,
+    output?.final_score,
+    output?.consensus?.score,
+  ]) {
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 async function evaluateCondition(
@@ -1192,10 +1225,14 @@ async function evaluateCondition(
       return (
         typeof resolvedExitCode === "number" && resolvedExitCode === t.exit_code
       );
-    case "score_above":
-      return (output?.score || output?.final_score || 0) > (t.threshold || 0);
-    case "score_below":
-      return (output?.score || output?.final_score || 0) < (t.threshold || 1);
+    case "score_above": {
+      const s = stateScore(output);
+      return s !== undefined && s > (t.threshold || 0);
+    }
+    case "score_below": {
+      const s = stateScore(output);
+      return s !== undefined && s < (t.threshold || 1);
+    }
     case "score_between":
       const score = output?.score || output?.final_score || 0;
       return score >= (t.min || 0) && score <= (t.max || 1);

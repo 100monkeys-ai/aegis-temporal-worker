@@ -2036,3 +2036,188 @@ describe("ADR-113 attachment hydration", () => {
     expect(request.attachments).toBeUndefined();
   });
 });
+
+describe("score transitions read the score a state carries", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    for (const fn of Object.values(terminalActivityMocks)) {
+      fn.mockReset();
+    }
+    executeAgentRpcMock.mockReset();
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.executeSystemCommandActivity.mockResolvedValue({
+      status: "success",
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+    });
+  });
+
+  const terminals = {
+    DONE: { kind: "System" as const, command: "echo done", transitions: [] },
+    FAILED: {
+      kind: "System" as const,
+      command: "echo failed",
+      transitions: [],
+    },
+    OTHER: { kind: "System" as const, command: "echo other", transitions: [] },
+  };
+
+  const scoreRoutes = [
+    { condition: "score_above" as const, threshold: 0.7, target: "DONE" },
+    { condition: "score_below" as const, threshold: 0.7, target: "FAILED" },
+  ];
+
+  function panelDefinition() {
+    return baseDefinition(
+      {
+        PANEL: {
+          kind: "ParallelAgents",
+          agents: [
+            { agent: "judge-a", input: "{}", weight: 1.0 },
+            { agent: "judge-b", input: "{}", weight: 1.0 },
+          ],
+          consensus: { strategy: "weighted_average", threshold: 0.8 },
+          transitions: scoreRoutes,
+        },
+        ...terminals,
+      },
+      "PANEL",
+    );
+  }
+
+  function failedEvents() {
+    return activityMocks.publishEventActivity.mock.calls
+      .map((call) => call[0])
+      .filter((e) => e.event_type === "WorkflowExecutionFailed");
+  }
+
+  it("routes a ParallelAgents state whose consensus score is 0.94 by score_above to DONE", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(panelDefinition());
+    activityMocks.executeParallelAgentsActivity.mockResolvedValue({
+      consensus: {
+        score: 0.94,
+        confidence: 0.97,
+        strategy: "weighted_average",
+      },
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("completed");
+    expect(result.final_state).toBe("DONE");
+  });
+
+  it("routes a ParallelAgents state whose consensus score is 0.5 by score_below to FAILED", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(panelDefinition());
+    activityMocks.executeParallelAgentsActivity.mockResolvedValue({
+      consensus: { score: 0.5, confidence: 0.9, strategy: "weighted_average" },
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.final_state).toBe("FAILED");
+  });
+
+  it.each([
+    ["score", { score: 0.9 }, "DONE"],
+    ["score", { score: 0.3 }, "FAILED"],
+    ["final_score", { final_score: 0.9 }, "DONE"],
+    ["final_score", { final_score: 0.3 }, "FAILED"],
+  ])(
+    "routes an Agent state whose output carries %s %j to %s",
+    async (_field, extra, expected) => {
+      activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+        baseDefinition(
+          {
+            CHECK: {
+              kind: "Agent",
+              agent: "checker",
+              input: "check",
+              transitions: scoreRoutes,
+            },
+            ...terminals,
+          },
+          "CHECK",
+        ),
+      );
+      activityMocks.executeAgentActivity.mockResolvedValue({
+        status: "completed",
+        output: "checked",
+        iterations: 1,
+        ...extra,
+      });
+
+      const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+      expect(result.final_state).toBe(expected);
+    },
+  );
+
+  it("fails the run, naming the state, when a state with only score transitions carries no score (skill-import's PARSE_AND_VALIDATE)", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          PARSE_AND_VALIDATE: {
+            kind: "Agent",
+            agent: "skill-validator",
+            input: "validate",
+            transitions: scoreRoutes,
+          },
+          ...terminals,
+        },
+        "PARSE_AND_VALIDATE",
+      ),
+    );
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "completed",
+      output: { quality_score: 0.9 },
+      iterations: 1,
+      execution_id: "exec-child",
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    const expectedError =
+      'State "PARSE_AND_VALIDATE" carries no score for its score transitions';
+    expect(result.status).toBe("failed");
+    expect(result.error).toBe(expectedError);
+    expect(result.final_state).toBe("PARSE_AND_VALIDATE");
+    expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
+    const failed = failedEvents();
+    expect(failed).toHaveLength(1);
+    expect(failed[0].error).toBe(expectedError);
+  });
+
+  it("takes another matching transition when a state carries no score", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          CHECK: {
+            kind: "Agent",
+            agent: "checker",
+            input: "check",
+            transitions: [
+              ...scoreRoutes,
+              { condition: "on_success", target: "OTHER" },
+            ],
+          },
+          ...terminals,
+        },
+        "CHECK",
+      ),
+    );
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "completed",
+      output: "checked",
+      iterations: 1,
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("completed");
+    expect(result.final_state).toBe("OTHER");
+  });
+});
