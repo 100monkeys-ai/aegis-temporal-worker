@@ -19,6 +19,24 @@ const configSchema = z.object({
   }),
   grpc: z.object({
     runtimeUrl: z.string().default("localhost:50051"),
+    // The channel to the orchestrator. A replaced orchestrator pod leaves the
+    // old connection silent (no FIN, no RST): only an HTTP/2 PING that goes
+    // unanswered for keepaliveTimeoutMs reveals it, keepaliveTimeMs after the
+    // last answered one, with or without calls in flight.
+    keepaliveTimeMs: z.coerce.number().int().positive().default(10_000),
+    keepaliveTimeoutMs: z.coerce.number().int().positive().default(5_000),
+    // The longest wait between two reconnection attempts, and between two
+    // lookups of runtimeUrl's name, while the orchestrator is unreachable
+    // (grpc-js defaults: 120 s and 30 s).
+    maxReconnectBackoffMs: z.coerce.number().int().positive().default(5_000),
+    dnsMinTimeBetweenResolutionsMs: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(5_000),
+    // How long a call waits for a connection before it fails as UNAVAILABLE,
+    // an error Temporal retries.
+    connectTimeoutMs: z.coerce.number().int().positive().default(60_000),
   }),
   http: z.object({
     port: z.coerce.number().default(3000),
@@ -54,6 +72,13 @@ function loadConfig(): Config {
     },
     grpc: {
       runtimeUrl: process.env.AEGIS_RUNTIME_GRPC_URL,
+      keepaliveTimeMs: process.env.AEGIS_RUNTIME_GRPC_KEEPALIVE_TIME_MS,
+      keepaliveTimeoutMs: process.env.AEGIS_RUNTIME_GRPC_KEEPALIVE_TIMEOUT_MS,
+      maxReconnectBackoffMs:
+        process.env.AEGIS_RUNTIME_GRPC_MAX_RECONNECT_BACKOFF_MS,
+      dnsMinTimeBetweenResolutionsMs:
+        process.env.AEGIS_RUNTIME_GRPC_DNS_MIN_TIME_BETWEEN_RESOLUTIONS_MS,
+      connectTimeoutMs: process.env.AEGIS_RUNTIME_GRPC_CONNECT_TIMEOUT_MS,
     },
     http: {
       port: process.env.HTTP_PORT,

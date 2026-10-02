@@ -76,11 +76,16 @@ function executionStatusUrl(executionId: string): string {
 
 async function fetchPersistedExecutionStatus(
   executionId: string,
+  tenantId?: string,
 ): Promise<string | null> {
   const token = await getServiceToken();
-  const resp = await fetch(executionStatusUrl(executionId), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  // The service account reads in aegis-system unless it names the tenant the
+  // execution belongs to, as ExecuteAgent's metadata does.
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  if (tenantId) {
+    headers["X-Tenant-Id"] = tenantId;
+  }
+  const resp = await fetch(executionStatusUrl(executionId), { headers });
   if (!resp.ok) {
     throw new Error(
       `Failed to fetch execution ${executionId} status (HTTP ${resp.status})`,
@@ -170,17 +175,82 @@ function synthesizeTerminalEvent(
   }
 }
 
+/** How the channel to the orchestrator finds a dead connection and a new one. */
+export interface RuntimeChannelSettings {
+  keepaliveTimeMs: number;
+  keepaliveTimeoutMs: number;
+  maxReconnectBackoffMs: number;
+  dnsMinTimeBetweenResolutionsMs: number;
+  connectTimeoutMs: number;
+}
+
+/**
+ * A replaced orchestrator pod leaves the old connection silent, and grpc-js
+ * keeps sending calls on it until the kernel gives up (about 15 minutes).
+ * Keepalive pings, sent also while no call is open, end it within
+ * keepaliveTimeMs + keepaliveTimeoutMs; every call on it then fails as
+ * UNAVAILABLE. Reconnection and the lookup of the name's new address are
+ * retried at most every maxReconnectBackoffMs / dnsMinTimeBetweenResolutionsMs
+ * (grpc-js defaults: 120 s and 30 s).
+ */
+function runtimeChannelOptions(
+  settings: RuntimeChannelSettings,
+): grpc.ChannelOptions {
+  return {
+    "grpc.keepalive_time_ms": settings.keepaliveTimeMs,
+    "grpc.keepalive_timeout_ms": settings.keepaliveTimeoutMs,
+    "grpc.keepalive_permit_without_calls": 1,
+    "grpc.max_reconnect_backoff_ms": settings.maxReconnectBackoffMs,
+    "grpc.dns_min_time_between_resolutions_ms":
+      settings.dnsMinTimeBetweenResolutionsMs,
+  };
+}
+
 // Create gRPC client
 class AegisRuntimeClient {
   private client: any;
+  private readonly serverAddress: string;
+  private readonly connectTimeoutMs: number;
 
-  constructor(serverAddress: string) {
+  constructor(serverAddress: string, settings: RuntimeChannelSettings) {
+    this.serverAddress = serverAddress;
+    this.connectTimeoutMs = settings.connectTimeoutMs;
     // Package name is aegis.runtime.v1
     this.client = new aegisProto.aegis.runtime.v1.AegisRuntime(
       serverAddress,
       grpc.credentials.createInsecure(),
+      runtimeChannelOptions(settings),
     );
     logger.info({ server_address: serverAddress }, "gRPC client initialized");
+  }
+
+  /**
+   * Wait for a connection to the orchestrator, at most connectTimeoutMs.
+   * grpc-js has no connect timeout of its own, and without this a call made
+   * while the orchestrator is restarting fails at once; with it the call goes
+   * out as soon as the new orchestrator answers, or fails as UNAVAILABLE, an
+   * error Temporal retries.
+   */
+  private waitForChannel(method: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.client.waitForReady(
+        Date.now() + this.connectTimeoutMs,
+        (error?: Error) => {
+          if (!error) {
+            resolve();
+            return;
+          }
+          const details = `${method}: no connection to the orchestrator at ${this.serverAddress} within ${this.connectTimeoutMs} ms (${error.message})`;
+          logger.error({ method }, details);
+          reject(
+            Object.assign(new Error(`14 UNAVAILABLE: ${details}`), {
+              code: grpc.status.UNAVAILABLE,
+              details,
+            }),
+          );
+        },
+      );
+    });
   }
 
   /**
@@ -193,6 +263,8 @@ class AegisRuntimeClient {
     if (request.tenant_id) {
       metadata.add("x-tenant-id", request.tenant_id);
     }
+
+    await this.waitForChannel("ExecuteAgent");
 
     return new Promise((resolve, reject) => {
       const events: ExecutionEvent[] = [];
@@ -216,6 +288,18 @@ class AegisRuntimeClient {
         call.removeAllListeners("data");
         call.removeAllListeners("end");
         call.removeAllListeners("error");
+        // The call is settled, but its stream lives on until it ends: an
+        // 'error' it emits with no listener would end the process. Keep a
+        // listener for whatever arrives, and cancel the stream (which itself
+        // ends it with a CANCELLED error). The orchestrator only stops
+        // forwarding events; the execution is not cancelled by this.
+        call.on("error", (error: Error & { code?: number }) => {
+          logger.debug(
+            { code: error.code, error: error.message, execution_id: executionId },
+            "ExecuteAgent stream ended after the call settled",
+          );
+        });
+        call.cancel();
       };
 
       const settleWithEvents = (
@@ -305,7 +389,10 @@ class AegisRuntimeClient {
         pollAttempt++;
 
         try {
-          const status = await fetchPersistedExecutionStatus(executionId);
+          const status = await fetchPersistedExecutionStatus(
+            executionId,
+            request.tenant_id,
+          );
           if (status && TERMINAL_STATUSES.has(status)) {
             const synthesizedEvent = synthesizeTerminalEvent(
               status,
@@ -459,6 +546,7 @@ class AegisRuntimeClient {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
     meta.add("authorization", `Bearer ${token}`);
+    await this.waitForChannel("ExecuteSystemCommand");
     return new Promise((resolve, reject) => {
       this.client.ExecuteSystemCommand(
         request,
@@ -488,6 +576,7 @@ class AegisRuntimeClient {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
     meta.add("authorization", `Bearer ${token}`);
+    await this.waitForChannel("ValidateWithJudges");
     return new Promise((resolve, reject) => {
       this.client.ValidateWithJudges(
         request,
@@ -521,6 +610,7 @@ class AegisRuntimeClient {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
     meta.add("authorization", `Bearer ${token}`);
+    await this.waitForChannel("QueryCortexPatterns");
     return new Promise((resolve, reject) => {
       this.client.QueryCortexPatterns(
         request,
@@ -550,6 +640,7 @@ class AegisRuntimeClient {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
     meta.add("authorization", `Bearer ${token}`);
+    await this.waitForChannel("StoreCortexPattern");
     return new Promise((resolve, reject) => {
       this.client.StoreCortexPattern(
         request,
@@ -579,6 +670,7 @@ class AegisRuntimeClient {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
     meta.add("authorization", `Bearer ${token}`);
+    await this.waitForChannel("StoreTrajectoryPattern");
     return new Promise((resolve, reject) => {
       this.client.StoreTrajectoryPattern(
         request,
@@ -608,6 +700,7 @@ class AegisRuntimeClient {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
     meta.add("authorization", `Bearer ${token}`);
+    await this.waitForChannel("ExecuteContainerRun");
     return new Promise((resolve, reject) => {
       this.client.ExecuteContainerRun(
         request,
@@ -647,6 +740,7 @@ class AegisRuntimeClient {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
     meta.add("authorization", `Bearer ${token}`);
+    await this.waitForChannel("CreateWorkspaceVolume");
     return new Promise((resolve, reject) => {
       this.client.CreateWorkspaceVolume(
         request,
@@ -683,6 +777,7 @@ class AegisRuntimeClient {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
     meta.add("authorization", `Bearer ${token}`);
+    await this.waitForChannel("DestroyWorkspaceVolume");
     return new Promise((resolve, reject) => {
       this.client.DestroyWorkspaceVolume(
         request,
@@ -718,6 +813,7 @@ class AegisRuntimeClient {
     if (request.tenant_id) {
       meta.add("x-tenant-id", request.tenant_id);
     }
+    await this.waitForChannel("InvokeOutputHandler");
     return new Promise((resolve, reject) => {
       this.client.InvokeOutputHandler(
         request,
@@ -756,6 +852,7 @@ class AegisRuntimeClient {
 // Singleton instance
 export const aegisRuntimeClient = new AegisRuntimeClient(
   config.grpc.runtimeUrl,
+  config.grpc,
 );
 
 // Export for testing
