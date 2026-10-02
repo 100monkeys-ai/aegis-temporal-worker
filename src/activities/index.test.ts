@@ -31,6 +31,7 @@ vi.mock("./workflow-activities.js", () => ({
 
 import {
   executeAgentActivity,
+  executeParallelAgentsActivity,
   executeParallelContainerRunActivity,
 } from "./index.js";
 
@@ -323,5 +324,110 @@ describe("Temporal activities", () => {
     const request = executeAgentMock.mock.calls[0][0];
     // Must use the explicit param, not the opaque Blackboard value
     expect(request.tenant_id).toBe("explicit-tenant");
+  });
+});
+
+describe("ParallelAgents consensus without judges_for_parallel", () => {
+  const AGENT_A = "123e4567-e89b-12d3-a456-426614174001";
+  const AGENT_B = "123e4567-e89b-12d3-a456-426614174002";
+
+  beforeEach(() => {
+    executeAgentMock.mockReset();
+  });
+
+  function completedWith(final_output: string) {
+    return [
+      {
+        event_type: "ExecutionCompleted",
+        execution_id: "child",
+        timestamp: "2026-10-02T01:43:43Z",
+        final_output,
+        total_iterations: 1,
+      },
+    ];
+  }
+
+  function run(strategy = "weighted_average", threshold = 0.8) {
+    return executeParallelAgentsActivity({
+      agents: [
+        { agent: AGENT_A, input: "{}", weight: 1.0 },
+        { agent: AGENT_B, input: "{}", weight: 1.0 },
+      ],
+      consensus: { strategy, threshold },
+    });
+  }
+
+  it("combines two agents' verdicts 0.93 and 0.95 into their weighted average", async () => {
+    executeAgentMock
+      .mockResolvedValueOnce(
+        completedWith(
+          '```json\n{"score": 0.93, "confidence": 0.9, "reasoning": "meets the rubric"}\n```',
+        ),
+      )
+      .mockResolvedValueOnce(
+        completedWith(
+          '{"score": 0.95, "confidence": 0.9, "reasoning": "good"}',
+        ),
+      );
+
+    const result = await run();
+
+    expect(result.consensus.score).toBeCloseTo(0.94, 10);
+    // The orchestrator's weighted_average: 0.7 x agreement + 0.3 x mean confidence.
+    expect(result.consensus.confidence).toBeCloseTo(
+      0.7 * (1 - 0.0001 / 0.25) + 0.3 * 0.9,
+      10,
+    );
+    expect(result.consensus.strategy).toBe("weighted_average");
+    expect(result.consensus.metadata.individual_results).toEqual([
+      {
+        agent: AGENT_A,
+        score: 0.93,
+        confidence: 0.9,
+        reasoning: "meets the rubric",
+      },
+      { agent: AGENT_B, score: 0.95, confidence: 0.9, reasoning: "good" },
+    ]);
+    expect(result.consensus.metadata.reasoning).not.toContain(
+      "No judge agents configured",
+    );
+  });
+
+  it.each([
+    ["majority_vote", 1.0],
+    ["unanimous", 0.94],
+    ["best_of_n", 0.94],
+  ])("combines the verdicts by %s", async (strategy, expected) => {
+    executeAgentMock
+      .mockResolvedValueOnce(
+        completedWith('{"score": 0.93, "confidence": 0.9}'),
+      )
+      .mockResolvedValueOnce(
+        completedWith('{"score": 0.95, "confidence": 0.9}'),
+      );
+
+    const result = await run(strategy, 0.8);
+
+    expect(result.consensus.score).toBeCloseTo(expected, 10);
+    expect(result.consensus.strategy).toBe(strategy);
+  });
+
+  it("says there is no score to combine when no agent returns a verdict", async () => {
+    executeAgentMock
+      .mockResolvedValueOnce(completedWith("The code looks fine to me."))
+      .mockResolvedValueOnce(completedWith('{"verdict": "pass"}'));
+
+    const result = await run();
+
+    expect(result.consensus.score).toBeUndefined();
+    expect(result.consensus.confidence).toBeUndefined();
+    expect(result.consensus.metadata.individual_results).toEqual([]);
+    expect(result.consensus.metadata.agents_without_verdict).toEqual([
+      AGENT_A,
+      AGENT_B,
+    ]);
+    expect(result.consensus.metadata.reasoning).toBe(
+      "No judge agents are configured for this ParallelAgents state and none of its agents returned a verdict (a JSON object with a score from 0.0 to 1.0): there is no score to combine.",
+    );
   });
 });

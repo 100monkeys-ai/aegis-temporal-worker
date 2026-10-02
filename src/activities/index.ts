@@ -310,6 +310,180 @@ export async function validateOutputActivity(params: {
   }
 }
 
+/** The confidence of a verdict that states none: the orchestrator's
+ * `ABSENT_CONFIDENCE` (aegis-orchestrator domain/validation.rs). */
+const ABSENT_VERDICT_CONFIDENCE = 0.8;
+
+interface AgentVerdict {
+  agent: string;
+  score: number;
+  confidence: number;
+  reasoning: string;
+  weight: number;
+}
+
+function unitInterval(value: unknown): number | undefined {
+  return typeof value === "number" && value >= 0 && value <= 1
+    ? value
+    : undefined;
+}
+
+/**
+ * Read an agent's final output as a verdict, by the orchestrator's contract
+ * (read_judge_verdict): the first fenced block when there is one, else the
+ * whole output, as a JSON object whose `score` is a number from 0.0 to 1.0.
+ * Undefined when the output is not a verdict.
+ */
+function readAgentVerdict(
+  output: string,
+): Omit<AgentVerdict, "agent" | "weight"> | undefined {
+  const fenced = /```[a-zA-Z]*\s*\n?([\s\S]*?)```/.exec(output);
+  const candidate = (fenced ? fenced[1] : output).trim();
+  let value: unknown;
+  try {
+    value = JSON.parse(candidate);
+  } catch {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const fields = value as Record<string, unknown>;
+  const score = unitInterval(fields.score);
+  if (score === undefined) return undefined;
+  const confidence =
+    fields.confidence === undefined || fields.confidence === null
+      ? ABSENT_VERDICT_CONFIDENCE
+      : unitInterval(fields.confidence);
+  if (confidence === undefined) return undefined;
+  const reasoning = ["reasoning", "feedback", "message"]
+    .map((k) => fields[k])
+    .find((v): v is string => typeof v === "string");
+  return { score, confidence, reasoning: reasoning ?? "" };
+}
+
+/**
+ * Combine verdicts by the state's strategy, as the orchestrator's
+ * validation_service.rs combines its judges' verdicts.
+ */
+function combineVerdicts(
+  verdicts: AgentVerdict[],
+  strategy: string,
+  threshold: number,
+): { score: number; confidence: number } {
+  const count = verdicts.length;
+  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  switch (strategy) {
+    case "majority_vote": {
+      const pass = verdicts.filter((v) => v.score >= threshold).length;
+      const fail = count - pass;
+      const score = pass > fail ? 1.0 : fail > pass ? 0.0 : 0.5;
+      const margin = Math.min(Math.abs(pass - fail) / count, 1.0);
+      return {
+        score,
+        confidence:
+          margin * 0.7 + mean(verdicts.map((v) => v.confidence)) * 0.3,
+      };
+    }
+    case "unanimous": {
+      const allPass = verdicts.every((v) => v.score >= threshold);
+      return {
+        score: allPass ? mean(verdicts.map((v) => v.score)) : 0.0,
+        confidence: Math.min(...verdicts.map((v) => v.confidence)),
+      };
+    }
+    case "best_of_n": {
+      const top = [...verdicts].sort(
+        (a, b) => b.score * b.confidence - a.score * a.confidence,
+      );
+      const totalWeight = top.reduce((a, v) => a + v.weight, 0);
+      return {
+        score:
+          totalWeight > 0
+            ? top.reduce((a, v) => a + v.score * v.weight, 0) / totalWeight
+            : mean(top.map((v) => v.score)),
+        confidence: mean(top.map((v) => v.confidence)),
+      };
+    }
+    default: {
+      // weighted_average
+      const totalWeight = verdicts.reduce((a, v) => a + v.weight, 0);
+      const weightOf = (v: AgentVerdict) =>
+        totalWeight > 0 ? v.weight / totalWeight : 1 / count;
+      const unweightedMean = mean(verdicts.map((v) => v.score));
+      const variance = mean(
+        verdicts.map((v) => (v.score - unweightedMean) ** 2),
+      );
+      const agreement = 1.0 - Math.min(variance / 0.25, 1.0);
+      return {
+        score: verdicts.reduce((a, v) => a + v.score * weightOf(v), 0),
+        confidence:
+          agreement * 0.7 +
+          verdicts.reduce((a, v) => a + v.confidence * weightOf(v), 0) * 0.3,
+      };
+    }
+  }
+}
+
+/**
+ * The consensus of a ParallelAgents state without judges_for_parallel: the
+ * agents' own verdicts combined by the state's strategy. With no verdict to
+ * combine it carries no score and says so; it never reports a score of its own.
+ */
+function consensusOfAgentVerdicts(
+  results: Array<{ output: string; agent: string; weight: number }>,
+  consensus: { strategy: string; threshold: number },
+): Record<string, unknown> {
+  const verdicts: AgentVerdict[] = [];
+  const withoutVerdict: string[] = [];
+  for (const r of results) {
+    const verdict = readAgentVerdict(r.output);
+    if (verdict) {
+      verdicts.push({ ...verdict, agent: r.agent, weight: r.weight });
+    } else {
+      withoutVerdict.push(r.agent);
+    }
+  }
+  const metadata = {
+    individual_outputs: results.map((r) => r.output),
+    individual_results: verdicts.map((v) => ({
+      agent: v.agent,
+      score: v.score,
+      confidence: v.confidence,
+      reasoning: v.reasoning,
+    })),
+    agents_without_verdict: withoutVerdict,
+  };
+  if (verdicts.length === 0) {
+    return {
+      strategy: consensus.strategy,
+      metadata: {
+        ...metadata,
+        reasoning:
+          "No judge agents are configured for this ParallelAgents state and none of its agents returned a verdict (a JSON object with a score from 0.0 to 1.0): there is no score to combine.",
+      },
+    };
+  }
+  const combined = combineVerdicts(
+    verdicts,
+    consensus.strategy,
+    consensus.threshold,
+  );
+  const missing =
+    withoutVerdict.length > 0
+      ? ` ${withoutVerdict.length} returned no verdict (${withoutVerdict.join(", ")}) and are not counted.`
+      : "";
+  return {
+    score: combined.score,
+    confidence: combined.confidence,
+    strategy: consensus.strategy,
+    metadata: {
+      ...metadata,
+      reasoning: `No judge agents are configured for this ParallelAgents state: the consensus combines the verdicts of ${verdicts.length} of its ${results.length} agents by ${consensus.strategy}.${missing}`,
+    },
+  };
+}
+
 /**
  * Execute multiple agents in parallel
  */
@@ -372,19 +546,9 @@ export async function executeParallelAgentsActivity(params: {
     // judges_for_parallel must be a *separate* set of agents from the workers above;
     // passing workers as their own judges would violate ADR-016 (agents cannot judge themselves).
     if (!params.judges || params.judges.length === 0) {
-      // No external judges configured — return raw results without consensus scoring.
+      // No external judges: the agents' own verdicts are the scores to combine.
       return {
-        consensus: {
-          score: 1.0,
-          confidence: 1.0,
-          strategy: params.consensus.strategy,
-          metadata: {
-            individual_outputs: results.map((r) => r.output),
-            individual_results: [],
-            reasoning:
-              "No judge agents configured for this ParallelAgents state",
-          },
-        },
+        consensus: consensusOfAgentVerdicts(results, params.consensus),
       };
     }
 
