@@ -1,20 +1,38 @@
 name: Docker Publish
 
+# The image of a commit on main is published only once CI has passed on
+# that commit: this workflow starts when the CI workflow completes, and its
+# image job runs only when that CI run succeeded for a push to main of this
+# repository, building the commit CI tested (workflow_run.head_sha), so an
+# image CI rejected is never published. Release tags publish on their push,
+# as before. After the image, the deploy job redeploys the temporal pod
+# on nuclear-vm-1 by dispatching aegis-platform-deployment's deploy-pod.yml
+# (Zaru ADR-0038's Update of 2026-10-05) and watches that run to its end.
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   push:
-    branches:
-      - main # Publishes :latest
     tags:
-      - "*.*.*" # Publishes semver tag (e.g. 0.2.0) + re-tags as :latest
+      - "*.*.*"
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: 100monkeys-ai/aegis-temporal-worker
+  # The commit the image is built from: the one CI tested, or the tag's.
+  SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
   build-and-push:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
 
     permissions:
       contents: read
@@ -25,6 +43,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
+          ref: ${{ env.SOURCE_SHA }}
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -33,20 +52,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Under workflow_run the event's own sha is main's latest commit, not
+      # the one CI tested, so the sha tag and the revision label are named
+      # from SOURCE_SHA.
+      - name: The short sha
+        id: short
+        run: echo "sha=${SOURCE_SHA:0:7}" >>"$GITHUB_OUTPUT"
+
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Push :latest on every push to main
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            # Push semver tag (v1.2.3 → 1.2.3) and also :latest on tag push
+            type=raw,value=latest,enable=${{ github.event_name == 'workflow_run' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            # Push short SHA for traceability on main branch
-            type=sha,prefix=sha-,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=sha-${{ steps.short.outputs.sha }},enable=${{ github.event_name == 'workflow_run' }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
 
       - name: Build and push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -56,3 +81,52 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  # Redeploy the temporal pod on nuclear-vm-1 with the image just
+  # pushed: dispatch aegis-platform-deployment's deploy-pod.yml (a reusable
+  # call is impossible from this public repository to that internal one),
+  # find that run by its run-name "deploy-pod temporal <sha>", and watch
+  # it to its end, so this run goes red when the deploy does. Without the
+  # organisation secret AEGIS_DEPLOY_DISPATCH_TOKEN this job fails, naming
+  # it: a merge that does not deploy is visible.
+  deploy:
+    name: Deploy temporal (nuclear-vm-1)
+    needs: [build-and-push]
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    permissions: {}
+    timeout-minutes: 45
+    concurrency:
+      group: deploy-temporal
+      cancel-in-progress: false
+    steps:
+      - name: Dispatch deploy-pod and watch it
+        env:
+          GH_TOKEN: ${{ secrets.AEGIS_DEPLOY_DISPATCH_TOKEN }}
+          DEPLOY_REPO: 100monkeys-ai/aegis-platform-deployment
+          POD: temporal
+          IMAGE: aegis-temporal-worker
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::the organisation secret AEGIS_DEPLOY_DISPATCH_TOKEN is not available to this repository, so ${SOURCE_SHA} was published but not deployed"
+            exit 1
+          fi
+          title="deploy-pod ${POD} ${SOURCE_SHA}"
+          started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run deploy-pod.yml --repo "$DEPLOY_REPO" --ref main \
+            -f pod="$POD" -f image="$IMAGE" -f sha="$SOURCE_SHA"
+          id=""
+          for _ in $(seq 1 30); do
+            id="$(gh run list --repo "$DEPLOY_REPO" --workflow deploy-pod.yml \
+              --event workflow_dispatch --created ">=${started}" --limit 50 \
+              --json databaseId,displayTitle \
+              --jq "map(select(.displayTitle == \"${title}\")) | max_by(.databaseId) | .databaseId // empty")"
+            [ -n "$id" ] && break
+            sleep 10
+          done
+          if [ -z "$id" ]; then
+            echo "::error::no deploy-pod run named '${title}' appeared in ${DEPLOY_REPO} within 300 s"
+            exit 1
+          fi
+          echo "deploy-pod run ${id}: https://github.com/${DEPLOY_REPO}/actions/runs/${id}"
+          gh run watch "$id" --repo "$DEPLOY_REPO" --exit-status --interval 15
