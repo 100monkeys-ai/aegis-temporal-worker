@@ -641,6 +641,7 @@ export async function storeTrajectoryPatternActivity(params: {
 
 import { publishEventActivity } from "./event-activities.js";
 import { executeOutputHandlerActivity } from "./output-handler.js";
+import { fireScheduleActivity } from "./schedule-activities.js";
 
 /**
  * Create an ephemeral workspace volume for a workflow execution (ADR-087)
@@ -849,10 +850,12 @@ export const activities = {
   createEphemeralWorkspaceActivity,
   destroyWorkspaceVolumeActivity,
   executeOutputHandlerActivity,
+  fireScheduleActivity,
 };
 
 export {
   fetchWorkflowDefinition,
   publishEventActivity,
   executeOutputHandlerActivity,
+  fireScheduleActivity,
 };
