@@ -26,15 +26,36 @@ const agentActivities = proxyActivities<typeof activities>({
   },
 });
 
-const terminalAgentActivities = proxyActivities<typeof activities>({
-  startToCloseTimeout: "10 minutes",
+/** The time the agent activity is given beyond its run's own limit. */
+const AGENT_RUN_LIMIT_MARGIN_SECONDS = 60;
+
+/** Without a heartbeat for this long, the agent activity is considered lost. */
+const AGENT_RUN_HEARTBEAT_TIMEOUT = "2 minutes";
+
+/** The agent's run limit, read before its run starts. */
+const { agentRunLimitSecondsActivity } = proxyActivities<typeof activities>({
+  startToCloseTimeout: "1 minute",
   retry: {
-    maximumAttempts: 1,
+    maximumAttempts: 3,
   },
 });
 
+/**
+ * The activity that runs an agent once (the activity's own guard): its limit
+ * is the run's own limit plus a margin, it heartbeats while the run's stream
+ * lives, and a retry after the run has begun starts no second run.
+ */
+function agentRunActivity(limitSeconds: number, terminal: boolean) {
+  return proxyActivities<typeof activities>({
+    startToCloseTimeout: `${limitSeconds + AGENT_RUN_LIMIT_MARGIN_SECONDS} seconds`,
+    heartbeatTimeout: AGENT_RUN_HEARTBEAT_TIMEOUT,
+    retry: {
+      maximumAttempts: terminal ? 1 : 3,
+    },
+  }).executeAgentActivity;
+}
+
 const {
-  executeAgentActivity,
   executeSystemCommandActivity,
   validateOutputActivity,
   executeParallelAgentsActivity,
@@ -45,9 +66,6 @@ const {
   executeParallelContainerRunActivity,
   executeOutputHandlerActivity,
 } = agentActivities;
-
-const { executeAgentActivity: executeAgentTerminalActivity } =
-  terminalAgentActivities;
 
 const workspaceActivities = proxyActivities<{
   createEphemeralWorkspaceActivity: typeof import("../activities/index.js").createEphemeralWorkspaceActivity;
@@ -521,6 +539,12 @@ async function executeState(
           `Template resolution failed: "${state.agent}" resolved to empty string. Check blackboard keys.`,
         );
       }
+      // The activity's limit follows the agent's own run limit.
+      const runLimitSeconds = await agentRunLimitSecondsActivity({
+        agentId: resolvedAgent,
+        tenantId: blackboard.tenant_id as string | undefined,
+      });
+
       // Iteration bound: state config > workflow-level context > default of 10
       const maxIterations: number = state.max_iterations ?? 10;
 
@@ -586,10 +610,9 @@ async function executeState(
               ? blackboard.workspace_volume_id_remote_path
               : undefined;
 
-          const result = await (
-            isTerminalValidationAgent
-              ? executeAgentTerminalActivity
-              : executeAgentActivity
+          const result = await agentRunActivity(
+            runLimitSeconds,
+            isTerminalValidationAgent,
           )({
             agentId: resolvedAgent,
             input: currentInput,

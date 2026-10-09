@@ -1,12 +1,40 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecuteContainerRunResponse } from "../types.js";
 
-const { executeContainerRunMock, executeAgentMock } = vi.hoisted(() => ({
+const {
+  executeContainerRunMock,
+  executeAgentMock,
+  cancelMock,
+  activityContext,
+} = vi.hoisted(() => ({
   executeContainerRunMock: vi.fn(),
   executeAgentMock: vi.fn(),
+  cancelMock: vi.fn(),
+  /** The Temporal activity context the code under test sees; none outside an activity. */
+  activityContext: { current: undefined as unknown },
+}));
+
+vi.mock("@temporalio/activity", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@temporalio/activity")>();
+  return {
+    ...actual,
+    Context: {
+      current: () => {
+        if (!activityContext.current) {
+          throw new Error("Activity context not initialized");
+        }
+        return activityContext.current;
+      },
+    },
+  };
+});
+
+vi.mock("../auth/token-manager.js", () => ({
+  getServiceToken: vi.fn().mockResolvedValue("test-token"),
 }));
 
 vi.mock("../grpc/client.js", () => ({
+  cancelAgentExecution: cancelMock,
   aegisRuntimeClient: {
     executeContainerRun: executeContainerRunMock,
     executeAgent: executeAgentMock,
@@ -29,6 +57,8 @@ vi.mock("./workflow-activities.js", () => ({
   fetchWorkflowDefinition: vi.fn(),
 }));
 
+import { ApplicationFailure, CancelledFailure } from "@temporalio/activity";
+import * as activitiesModule from "./index.js";
 import {
   executeAgentActivity,
   executeParallelAgentsActivity,
@@ -83,6 +113,7 @@ describe("Temporal activities", () => {
         agent_id: "123e4567-e89b-12d3-a456-426614174000",
         workflow_execution_id: "wf-exec-1",
       }),
+      expect.anything(),
     );
 
     const request = executeAgentMock.mock.calls[0][0];
@@ -478,4 +509,227 @@ describe("ParallelAgents consensus without judges_for_parallel", () => {
       "No judge agents are configured for this ParallelAgents state and none of its agents returned a verdict (a JSON object with a score from 0.0 to 1.0): there is no score to combine.",
     );
   });
+});
+
+describe("an agent run starts once per step", () => {
+  const AGENT = "123e4567-e89b-12d3-a456-426614174000";
+  let controller: AbortController;
+  let heartbeat: ReturnType<typeof vi.fn>;
+
+  function inActivity(heartbeatDetails?: unknown) {
+    controller = new AbortController();
+    heartbeat = vi.fn();
+    activityContext.current = {
+      info: { heartbeatDetails },
+      heartbeat,
+      cancellationSignal: controller.signal,
+    };
+  }
+
+  beforeEach(() => {
+    executeAgentMock.mockReset();
+    cancelMock.mockReset();
+    cancelMock.mockResolvedValue(undefined);
+    activityContext.current = undefined;
+  });
+
+  type Hooks = {
+    onRunBegun?: () => void;
+    onRunId?: (id: string) => void;
+    signal?: AbortSignal;
+  };
+
+  it("starts no second run when an earlier attempt's run outlived it, and is not retried", async () => {
+    inActivity({ run_begun: true, execution_id: "run-1" });
+
+    const failure = await executeAgentActivity({
+      agentId: AGENT,
+      input: "task",
+      context: {},
+      tenantId: "tenant-a",
+    }).catch((error: unknown) => error);
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(failure).toBeInstanceOf(ApplicationFailure);
+    expect((failure as ApplicationFailure).nonRetryable).toBe(true);
+    expect((failure as ApplicationFailure).message).toBe(
+      "An earlier attempt of this step began the agent run run-1; it is not started again.",
+    );
+    expect(cancelMock).toHaveBeenCalledWith("run-1", "tenant-a");
+  });
+
+  it("keeps its own failure when the orchestrator refuses the cancel", async () => {
+    inActivity({ run_begun: true, execution_id: "run-1" });
+    cancelMock.mockRejectedValue(
+      new Error(
+        "The orchestrator refused to cancel execution run-1 (HTTP 403)",
+      ),
+    );
+
+    const failure = await executeAgentActivity({
+      agentId: AGENT,
+      input: "task",
+      context: {},
+      tenantId: "tenant-a",
+    }).catch((error: unknown) => error);
+
+    expect(cancelMock).toHaveBeenCalledWith("run-1", "tenant-a");
+    expect((failure as ApplicationFailure).type).toBe("AgentRunAlreadyBegun");
+  });
+
+  it("retries a transport failure before the run has begun", async () => {
+    inActivity();
+    const unavailable = Object.assign(
+      new Error("14 UNAVAILABLE: no connection"),
+      {
+        code: 14,
+      },
+    );
+    executeAgentMock.mockRejectedValue(unavailable);
+
+    const failure = await executeAgentActivity({
+      agentId: AGENT,
+      input: "task",
+      context: {},
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBe(unavailable);
+    expect(failure).not.toBeInstanceOf(ApplicationFailure);
+    expect(cancelMock).not.toHaveBeenCalled();
+  });
+
+  it("is not retried when the run's stream fails after the run has begun, and cancels the run", async () => {
+    inActivity();
+    executeAgentMock.mockImplementation(
+      async (_request: unknown, hooks?: Hooks) => {
+        hooks?.onRunBegun?.();
+        hooks?.onRunId?.("run-1");
+        throw Object.assign(new Error("13 INTERNAL: RST_STREAM"), { code: 13 });
+      },
+    );
+
+    const failure = await executeAgentActivity({
+      agentId: AGENT,
+      input: "task",
+      context: {},
+      tenantId: "tenant-a",
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ApplicationFailure);
+    expect((failure as ApplicationFailure).nonRetryable).toBe(true);
+    expect(cancelMock).toHaveBeenCalledWith("run-1", "tenant-a");
+    expect(heartbeat).toHaveBeenLastCalledWith({
+      run_begun: true,
+      execution_id: "run-1",
+    });
+  });
+
+  it("asks the orchestrator to cancel its run when the activity ends before the run", async () => {
+    inActivity();
+    executeAgentMock.mockImplementation(
+      (_request: unknown, hooks?: Hooks) =>
+        new Promise((_resolve, reject) => {
+          const ended = () =>
+            reject(
+              new Error(
+                "ExecuteAgent stream ended by the caller before the run's end",
+              ),
+            );
+          hooks?.onRunBegun?.();
+          hooks?.onRunId?.("run-1");
+          hooks?.signal?.addEventListener("abort", ended);
+          // The activity times out: Temporal cancels it.
+          controller.abort(new CancelledFailure("TIMED_OUT"));
+          // A caller that passes no signal is never told: its stream ends here.
+          if (!hooks?.signal) ended();
+        }),
+    );
+
+    const failure = await executeAgentActivity({
+      agentId: AGENT,
+      input: "task",
+      context: {},
+      tenantId: "tenant-a",
+    }).catch((error: unknown) => error);
+
+    expect(cancelMock).toHaveBeenCalledWith("run-1", "tenant-a");
+    expect(failure).toBeInstanceOf(CancelledFailure);
+  });
+
+  it("sends no timeout_seconds: the orchestrator bounds the run by the agent's own limit", async () => {
+    executeAgentMock.mockResolvedValue([
+      {
+        event_type: "ExecutionCompleted",
+        execution_id: "run-1",
+        timestamp: "2026-10-09T00:00:00Z",
+        final_output: "ok",
+        total_iterations: 1,
+      },
+    ]);
+
+    await executeAgentActivity({ agentId: AGENT, input: "task", context: {} });
+
+    expect(executeAgentMock.mock.calls[0][0]).not.toHaveProperty(
+      "timeout_seconds",
+    );
+  });
+});
+
+describe("agentRunLimitSecondsActivity", () => {
+  const AGENT = "123e4567-e89b-12d3-a456-426614174000";
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.AEGIS_ORCHESTRATOR_URL = "http://orchestrator.test";
+  });
+
+  function agentWithTimeout(timeout?: string) {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: AGENT,
+        manifest: {
+          spec: {
+            security:
+              timeout === undefined ? undefined : { resources: { timeout } },
+          },
+        },
+      }),
+    });
+  }
+
+  const limitOf = (params: { agentId: string; tenantId?: string }) =>
+    (
+      (activitiesModule as Record<string, unknown>)
+        .agentRunLimitSecondsActivity as (p: typeof params) => Promise<number>
+    )(params);
+
+  it.each([
+    ["1200s", 1200],
+    ["20m", 1200],
+    ["1h", 3600],
+    ["900", 900],
+    [undefined, 1800],
+  ])(
+    "reads the agent's run limit %s as %d seconds",
+    async (timeout, seconds) => {
+      agentWithTimeout(timeout);
+
+      await expect(
+        limitOf({ agentId: AGENT, tenantId: "tenant-a" }),
+      ).resolves.toBe(seconds);
+      expect(fetchMock).toHaveBeenCalledWith(
+        `http://orchestrator.test/v1/agents/${AGENT}`,
+        {
+          headers: {
+            Authorization: "Bearer test-token",
+            "X-Tenant-Id": "tenant-a",
+          },
+        },
+      );
+    },
+  );
 });

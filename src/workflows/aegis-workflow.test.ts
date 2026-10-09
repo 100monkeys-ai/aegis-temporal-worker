@@ -23,6 +23,11 @@ const { activityMocks, terminalActivityMocks, executeAgentRpcMock } =
     executeAgentRpcMock: vi.fn(),
   }));
 
+/** The agent's run limit as the workflow reads it; 1,800 s unless a test says otherwise. */
+const { agentRunLimitSecondsMock } = vi.hoisted(() => ({
+  agentRunLimitSecondsMock: vi.fn(async () => 1800),
+}));
+
 vi.mock("../activities/index.js", () => activityMocks);
 
 vi.mock("../activities/workflow-activities.js", () => ({
@@ -30,6 +35,7 @@ vi.mock("../activities/workflow-activities.js", () => ({
 }));
 
 vi.mock("../grpc/client.js", () => ({
+  cancelAgentExecution: vi.fn(),
   aegisRuntimeClient: {
     executeAgent: executeAgentRpcMock,
     executeSystemCommand: vi.fn(),
@@ -50,10 +56,12 @@ vi.mock("../logger.js", () => ({
 
 vi.mock("@temporalio/workflow", () => ({
   proxyActivities: vi.fn(
-    (options?: { retry?: { maximumAttempts?: number } }) =>
-      options?.retry?.maximumAttempts === 1
+    (options?: { retry?: { maximumAttempts?: number } }) => ({
+      ...(options?.retry?.maximumAttempts === 1
         ? terminalActivityMocks
-        : activityMocks,
+        : activityMocks),
+      agentRunLimitSecondsActivity: agentRunLimitSecondsMock,
+    }),
   ),
   setHandler: vi.fn(),
   defineSignal: vi.fn(() => Symbol("humanInput")),
@@ -62,6 +70,7 @@ vi.mock("@temporalio/workflow", () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
+import { proxyActivities } from "@temporalio/workflow";
 import { aegis_workflow } from "./aegis-workflow.js";
 
 function baseDefinition(
@@ -458,6 +467,7 @@ describe("aegis_workflow container orchestration behavior", () => {
         agent_id: "123e4567-e89b-12d3-a456-426614174000",
         workflow_execution_id: "exec-123",
       }),
+      expect.anything(),
     );
     const request = executeAgentRpcMock.mock.calls[0][0];
     expect(request.parent_execution_id).toBeUndefined();
@@ -2766,5 +2776,75 @@ describe("score transitions read the score a state carries", () => {
       expect(result.status).toBe("failed");
       expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("an Agent state's activity limit follows its agent's run limit", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    for (const fn of Object.values(terminalActivityMocks)) {
+      fn.mockReset();
+    }
+    vi.mocked(proxyActivities).mockClear();
+    agentRunLimitSecondsMock.mockClear();
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    const completed = { status: "completed", output: "done", iterations: 1 };
+    activityMocks.executeAgentActivity.mockResolvedValue(completed);
+    terminalActivityMocks.executeAgentActivity.mockResolvedValue(completed);
+  });
+
+  function agentState(agent: string, stateName = "RECORD") {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue({
+      ...baseDefinition(
+        { [stateName]: { kind: "Agent", agent, input: "go", transitions: [] } },
+        stateName,
+      ),
+      tenant_id: "tenant-a",
+    });
+  }
+
+  it.each([
+    [1200, "1260 seconds"],
+    [1800, "1860 seconds"],
+  ])(
+    "gives an agent whose run limit is %d s an activity of %s, a heartbeat timeout, and 3 attempts",
+    async (limit, startToClose) => {
+      agentState("email-loop-clerk");
+      agentRunLimitSecondsMock.mockResolvedValueOnce(limit);
+
+      const result = await aegis_workflow({
+        workflow_id: "wf-1",
+        input: {},
+        blackboard: { tenant_id: "tenant-a" },
+      });
+
+      expect(result.status).toBe("completed");
+      expect(agentRunLimitSecondsMock).toHaveBeenCalledWith({
+        agentId: "email-loop-clerk",
+        tenantId: "tenant-a",
+      });
+      expect(proxyActivities).toHaveBeenCalledWith({
+        startToCloseTimeout: startToClose,
+        heartbeatTimeout: "2 minutes",
+        retry: { maximumAttempts: 3 },
+      });
+      expect(activityMocks.executeAgentActivity).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("gives the terminal validation agent the same limit with one attempt", async () => {
+    agentState("workflow-creator-validator-agent", "VALIDATE");
+    agentRunLimitSecondsMock.mockResolvedValueOnce(600);
+
+    await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(proxyActivities).toHaveBeenCalledWith({
+      startToCloseTimeout: "660 seconds",
+      heartbeatTimeout: "2 minutes",
+      retry: { maximumAttempts: 1 },
+    });
+    expect(terminalActivityMocks.executeAgentActivity).toHaveBeenCalledTimes(1);
   });
 });

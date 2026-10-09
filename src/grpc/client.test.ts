@@ -683,3 +683,160 @@ describe("a settled executeAgent call", () => {
     expect(() => call.emit("error", lateTransportError())).not.toThrow();
   });
 });
+
+describe("AegisRuntimeClient.executeAgent: the run's id and the caller's end", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useRealTimers();
+    mocks.runtimeCtorMock.mockReset();
+    mocks.runtimeCtorMock.mockImplementation(function () {
+      return {
+        ExecuteAgent: mocks.executeAgentRpcMock,
+        close: mocks.closeMock,
+        waitForReady: mocks.waitForReadyMock,
+      };
+    });
+    mocks.executeAgentRpcMock.mockReset();
+    mocks.waitForReadyMock.mockReset();
+    mocks.waitForReadyMock.mockImplementation(readyChannel);
+    mocks.fetchMock.mockReset();
+    for (const fn of Object.values(mocks.logger)) {
+      fn.mockReset();
+    }
+    vi.stubGlobal("fetch", mocks.fetchMock);
+    process.env.AEGIS_EXECUTION_FALLBACK_IDLE_MS = "10";
+    process.env.AEGIS_EXECUTION_FALLBACK_POLL_MS = "10";
+    process.env.AEGIS_EXECUTION_FALLBACK_MAX_RETRIES = "2";
+    process.env.AEGIS_ORCHESTRATOR_URL = "http://orchestrator.test";
+  });
+
+  async function start(hooks?: Record<string, unknown>) {
+    const call = mockCall();
+    mocks.executeAgentRpcMock.mockReturnValue(call);
+    const { aegisRuntimeClient } = await import("./client.js");
+    const promise = (
+      aegisRuntimeClient.executeAgent as (
+        request: unknown,
+        hooks?: unknown,
+      ) => Promise<unknown[]>
+    )({ agent_id: "agent-1", input: "plan", context_json: "{}" }, hooks);
+    await vi.waitFor(() =>
+      expect(mocks.executeAgentRpcMock).toHaveBeenCalled(),
+    );
+    return { call, promise };
+  }
+
+  // The orchestrator sends ExecutionStarted before it has made the run, with
+  // an execution_id no read can find (server.rs, execute_agent).
+  const executionStarted = {
+    event: "execution_started",
+    execution_started: {
+      execution_id: "placeholder-id",
+      agent_id: "agent-1",
+      started_at: "2026-10-09T05:41:20Z",
+    },
+  };
+
+  it("never reads the run's status by ExecutionStarted's placeholder id", async () => {
+    mocks.fetchMock.mockResolvedValue({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: "Execution not found" }),
+    });
+    const { call, promise } = await start();
+    call.emit("data", executionStarted);
+    call.emit("end");
+
+    await expect(promise).rejects.toThrow(
+      "ExecuteAgent stream ended before the run's execution id arrived",
+    );
+    expect(mocks.fetchMock).not.toHaveBeenCalledWith(
+      "http://orchestrator.test/v1/executions/placeholder-id",
+      expect.anything(),
+    );
+  });
+
+  it("tells its caller when the run has begun and the run's own id", async () => {
+    const onRunBegun = vi.fn();
+    const onRunId = vi.fn();
+    const { call, promise } = await start({ onRunBegun, onRunId });
+
+    call.emit("data", executionStarted);
+    expect(onRunBegun).toHaveBeenCalledTimes(1);
+    expect(onRunId).not.toHaveBeenCalled();
+
+    call.emit("data", {
+      event: "iteration_started",
+      iteration_started: { execution_id: "run-1", iteration_number: 1 },
+    });
+    call.emit("data", {
+      event: "execution_completed",
+      execution_completed: { execution_id: "run-1", final_output: "done" },
+    });
+    await promise;
+
+    expect(onRunId).toHaveBeenCalledTimes(1);
+    expect(onRunId).toHaveBeenCalledWith("run-1");
+  });
+
+  it("ends the stream and rejects when its caller aborts", async () => {
+    const controller = new AbortController();
+    const { call, promise } = await start({ signal: controller.signal });
+    const settled = promise.catch((error: Error) => error);
+    call.emit("data", {
+      event: "iteration_started",
+      iteration_started: { execution_id: "run-1", iteration_number: 1 },
+    });
+
+    controller.abort();
+
+    expect(call.cancel).toHaveBeenCalledTimes(1);
+    expect(((await settled) as Error).message).toBe(
+      "ExecuteAgent stream ended by the caller before the run's end (execution run-1)",
+    );
+  });
+});
+
+describe("cancelAgentExecution", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mocks.fetchMock.mockReset();
+    vi.stubGlobal("fetch", mocks.fetchMock);
+    process.env.AEGIS_ORCHESTRATOR_URL = "http://orchestrator.test";
+  });
+
+  it("asks the orchestrator to cancel the run in the run's tenant", async () => {
+    mocks.fetchMock.mockResolvedValue({ ok: true, status: 200 });
+    const client = (await import("./client.js")) as Record<string, unknown>;
+    const cancel = client.cancelAgentExecution as (
+      executionId: string,
+      tenantId?: string,
+    ) => Promise<void>;
+
+    await cancel("run-1", "tenant-a");
+
+    expect(mocks.fetchMock).toHaveBeenCalledWith(
+      "http://orchestrator.test/v1/executions/run-1/cancel",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          "X-Tenant-Id": "tenant-a",
+        },
+      },
+    );
+  });
+
+  it("throws when the orchestrator refuses the cancel", async () => {
+    mocks.fetchMock.mockResolvedValue({ ok: false, status: 403 });
+    const client = (await import("./client.js")) as Record<string, unknown>;
+    const cancel = client.cancelAgentExecution as (
+      executionId: string,
+      tenantId?: string,
+    ) => Promise<void>;
+
+    await expect(cancel("run-1", "tenant-a")).rejects.toThrow(
+      "The orchestrator refused to cancel execution run-1 (HTTP 403)",
+    );
+  });
+});

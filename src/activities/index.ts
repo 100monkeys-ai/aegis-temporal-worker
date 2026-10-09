@@ -3,8 +3,9 @@
  * Activities call back to Rust services via gRPC
  */
 
+import { ApplicationFailure, Context } from "@temporalio/activity";
 import { logger } from "../logger.js";
-import { aegisRuntimeClient } from "../grpc/client.js";
+import { aegisRuntimeClient, cancelAgentExecution } from "../grpc/client.js";
 import { getServiceToken } from "../auth/token-manager.js";
 import type {
   ExecuteAgentRequest,
@@ -134,7 +135,127 @@ function agentOutputScore(output: unknown): number | undefined {
 }
 
 /**
- * Execute an agent via Rust ExecutionService
+ * The orchestrator's bound on an agent run when its manifest names none
+ * (`DEFAULT_EXECUTION_TIMEOUT_SECONDS`, `orchestrator/core/src/domain/supervisor.rs`).
+ */
+export const DEFAULT_AGENT_RUN_LIMIT_SECONDS = 1800;
+
+/**
+ * An agent manifest's `spec.security.resources.timeout` in seconds, read as
+ * the orchestrator reads it (`ResourceLimits::parse_timeout_seconds`): a whole
+ * number of hours ("1h"), minutes ("20m") or seconds ("1200s", "1200").
+ */
+function parseRunTimeoutSeconds(raw: unknown): number | undefined {
+  if (typeof raw !== "string") return undefined;
+  const m = raw.trim().match(/^(\d+)\s*([hms]?)$/);
+  if (!m) return undefined;
+  const value = Number.parseInt(m[1], 10);
+  if (m[2] === "h") return value * 3600;
+  if (m[2] === "m") return value * 60;
+  return value;
+}
+
+/**
+ * The run limit of an agent, in seconds: its manifest's
+ * `spec.security.resources.timeout`, else the orchestrator's 1,800 s. The
+ * workflow sets the agent activity's own limit from it.
+ */
+export async function agentRunLimitSecondsActivity(params: {
+  agentId: string;
+  tenantId?: string;
+}): Promise<number> {
+  const agentId = await resolveAgentId(params.agentId, params.tenantId);
+  const orchestratorUrl =
+    process.env.AEGIS_ORCHESTRATOR_URL || "http://localhost:8088";
+  const token = await getServiceToken();
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  if (params.tenantId) headers["X-Tenant-Id"] = params.tenantId;
+  const resp = await fetch(
+    `${orchestratorUrl}/v1/agents/${encodeURIComponent(agentId)}`,
+    { headers },
+  );
+  if (!resp.ok) {
+    throw new Error(
+      `Failed to read agent ${params.agentId} for its run limit (HTTP ${resp.status})`,
+    );
+  }
+  const agent = (await resp.json()) as {
+    manifest?: { spec?: { security?: { resources?: { timeout?: unknown } } } };
+  };
+  return (
+    parseRunTimeoutSeconds(
+      agent.manifest?.spec?.security?.resources?.timeout,
+    ) ?? DEFAULT_AGENT_RUN_LIMIT_SECONDS
+  );
+}
+
+/** How often the agent activity heartbeats while its run's stream lives. */
+export const AGENT_RUN_HEARTBEAT_INTERVAL_MS = 30_000;
+
+/** What an agent activity's heartbeat records about its run. */
+interface AgentRunHeartbeat {
+  run_begun: boolean;
+  execution_id?: string;
+}
+
+function earlierAttemptRun(details: unknown): AgentRunHeartbeat | undefined {
+  if (!details || typeof details !== "object") return undefined;
+  const run = details as Partial<AgentRunHeartbeat>;
+  if (run.run_begun !== true) return undefined;
+  return {
+    run_begun: true,
+    execution_id:
+      typeof run.execution_id === "string" && run.execution_id.length > 0
+        ? run.execution_id
+        : undefined,
+  };
+}
+
+/** The current activity's context, or none when called outside an activity. */
+function currentActivityContext(): Context | undefined {
+  try {
+    return Context.current();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Ask the orchestrator to cancel a run this step started. A refused cancel is
+ * logged and never fails the step.
+ */
+async function askToCancelRun(
+  executionId: string,
+  tenantId: string | undefined,
+  why: string,
+): Promise<void> {
+  try {
+    await cancelAgentExecution(executionId, tenantId);
+    logger.warn(
+      { execution_id: executionId, why },
+      "Asked the orchestrator to cancel the agent run",
+    );
+  } catch (error) {
+    logger.error(
+      {
+        execution_id: executionId,
+        why,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "The orchestrator did not cancel the agent run",
+    );
+  }
+}
+
+/**
+ * Execute an agent via Rust ExecutionService.
+ *
+ * An agent run starts once per step: it may send mail or change pages, so a
+ * second start is a second act. Once the run's stream has begun, a failure of
+ * this activity is not retried, and an attempt that finds an earlier attempt's
+ * run in its heartbeat details starts none. When the activity ends before its
+ * run (cancelled, timed out), it asks the orchestrator to cancel that run. A
+ * transport failure before the run has begun is retried by the retry policy.
  */
 export async function executeAgentActivity(params: {
   agentId: string;
@@ -156,13 +277,28 @@ export async function executeAgentActivity(params: {
 }): Promise<any> {
   logger.info({ agent_id: params.agentId }, "Executing agent activity");
 
+  const activity = currentActivityContext();
+  const earlier = earlierAttemptRun(activity?.info.heartbeatDetails);
+  if (earlier) {
+    if (earlier.execution_id) {
+      await askToCancelRun(
+        earlier.execution_id,
+        params.tenantId,
+        "an earlier attempt of this step began it and ended before it",
+      );
+    }
+    throw ApplicationFailure.nonRetryable(
+      `An earlier attempt of this step began the agent run${earlier.execution_id ? ` ${earlier.execution_id}` : ""}; it is not started again.`,
+      "AgentRunAlreadyBegun",
+    );
+  }
+
   const resolvedAgentId = await resolveAgentId(params.agentId, params.tenantId);
 
   const request: ExecuteAgentRequest = {
     agent_id: resolvedAgentId,
     input: params.input,
     context_json: JSON.stringify(params.context),
-    timeout_seconds: 600,
     tenant_id: params.tenantId,
   };
 
@@ -197,9 +333,25 @@ export async function executeAgentActivity(params: {
     request.attachments = params.attachments;
   }
 
+  const run: AgentRunHeartbeat = { run_begun: false };
+  const beat = () => activity?.heartbeat({ ...run });
+  const heartbeats = activity
+    ? setInterval(beat, AGENT_RUN_HEARTBEAT_INTERVAL_MS)
+    : undefined;
+
   try {
     // Call Rust ExecutionService via gRPC (streaming)
-    const events = await aegisRuntimeClient.executeAgent(request);
+    const events = await aegisRuntimeClient.executeAgent(request, {
+      onRunBegun: () => {
+        run.run_begun = true;
+        beat();
+      },
+      onRunId: (executionId) => {
+        run.execution_id = executionId;
+        beat();
+      },
+      signal: activity?.cancellationSignal,
+    });
 
     // Extract final result from events
     const completedEvent = events.find(
@@ -234,10 +386,30 @@ export async function executeAgentActivity(params: {
     throw new Error("No completion or failure event received");
   } catch (error) {
     logger.error(
-      { error, agent_id: params.agentId },
+      { error, agent_id: params.agentId, execution_id: run.execution_id },
       "Agent execution activity failed",
     );
-    throw error;
+    if (!run.run_begun) {
+      throw error;
+    }
+    if (run.execution_id) {
+      await askToCancelRun(
+        run.execution_id,
+        params.tenantId,
+        "the activity ended before its run",
+      );
+    }
+    if (activity?.cancellationSignal.aborted) {
+      // Cancelled or timed out: the activity ends as cancelled, and a retry
+      // finds this run in its heartbeat details and starts none.
+      throw activity.cancellationSignal.reason ?? error;
+    }
+    throw ApplicationFailure.nonRetryable(
+      `The agent run${run.execution_id ? ` ${run.execution_id}` : ""} began and its stream failed: ${error instanceof Error ? error.message : String(error)}`,
+      "AgentRunInterrupted",
+    );
+  } finally {
+    if (heartbeats) clearInterval(heartbeats);
   }
 }
 
@@ -839,6 +1011,7 @@ export async function executeParallelContainerRunActivity(params: {
 // Ensure all activities are exported for Temporal Worker
 export const activities = {
   executeAgentActivity,
+  agentRunLimitSecondsActivity,
   executeSystemCommandActivity,
   validateOutputActivity,
   executeParallelAgentsActivity,

@@ -74,6 +74,45 @@ function executionStatusUrl(executionId: string): string {
   return `${orchestratorUrl}/v1/executions/${encodeURIComponent(executionId)}`;
 }
 
+/**
+ * Ask the orchestrator to cancel an agent run (`POST /v1/executions/{id}/cancel`).
+ * The worker's service account names the run's tenant in `X-Tenant-Id`, as the
+ * status read does. Throws when the orchestrator does not answer 2xx; the
+ * caller decides whether a refused cancel matters.
+ */
+export async function cancelAgentExecution(
+  executionId: string,
+  tenantId?: string,
+): Promise<void> {
+  const token = await getServiceToken();
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  if (tenantId) {
+    headers["X-Tenant-Id"] = tenantId;
+  }
+  const resp = await fetch(`${executionStatusUrl(executionId)}/cancel`, {
+    method: "POST",
+    headers,
+  });
+  if (!resp.ok) {
+    throw new Error(
+      `The orchestrator refused to cancel execution ${executionId} (HTTP ${resp.status})`,
+    );
+  }
+}
+
+/**
+ * What the caller of executeAgent learns while the run's stream lives, and how
+ * it ends the stream early.
+ */
+export interface ExecuteAgentHooks {
+  /** The stream's ExecutionStarted arrived: the orchestrator has begun the run. */
+  onRunBegun?: () => void;
+  /** The run's own execution id, from the first event that carries it. */
+  onRunId?: (executionId: string) => void;
+  /** Aborting ends the stream and rejects the call; the run is not cancelled. */
+  signal?: AbortSignal;
+}
+
 async function fetchPersistedExecutionStatus(
   executionId: string,
   tenantId?: string,
@@ -256,7 +295,10 @@ class AegisRuntimeClient {
   /**
    * Execute an agent (streaming response for real-time events)
    */
-  async executeAgent(request: ExecuteAgentRequest): Promise<ExecutionEvent[]> {
+  async executeAgent(
+    request: ExecuteAgentRequest,
+    hooks: ExecuteAgentHooks = {},
+  ): Promise<ExecutionEvent[]> {
     const token = await getServiceToken();
     const metadata = new grpc.Metadata();
     metadata.add("authorization", `Bearer ${token}`);
@@ -275,6 +317,23 @@ class AegisRuntimeClient {
       let fallbackPollInFlight = false;
 
       const call = this.client.ExecuteAgent(request, metadata);
+
+      const onAbort = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        logger.warn(
+          { execution_id: executionId },
+          "ExecuteAgent stream ended by the caller before the run's end",
+        );
+        reject(
+          new Error(
+            `ExecuteAgent stream ended by the caller before the run's end (execution ${executionId ?? "unknown"})`,
+          ),
+        );
+      };
 
       const cleanup = () => {
         if (idleTimer) {
@@ -300,6 +359,7 @@ class AegisRuntimeClient {
           );
         });
         call.cancel();
+        hooks.signal?.removeEventListener("abort", onAbort);
       };
 
       const settleWithEvents = (
@@ -477,8 +537,14 @@ class AegisRuntimeClient {
           "Received execution event",
         );
         events.push(event);
-        if (event.execution_id) {
+        if (event.event_type === "ExecutionStarted") {
+          // ExecutionStarted is sent before the orchestrator has made the
+          // run, and its execution_id is a placeholder no read can find; the
+          // run's own id comes with the events after it.
+          hooks.onRunBegun?.();
+        } else if (event.execution_id && event.execution_id !== executionId) {
           executionId = event.execution_id;
+          hooks.onRunId?.(executionId);
         }
 
         if (TERMINAL_EVENT_TYPES.has(event.event_type)) {
@@ -499,8 +565,27 @@ class AegisRuntimeClient {
         scheduleFallbackProbe();
       });
 
+      if (hooks.signal?.aborted) {
+        onAbort();
+        return;
+      }
+      hooks.signal?.addEventListener("abort", onAbort);
+
       call.on("end", () => {
         if (settled) {
+          return;
+        }
+        if (!executionId) {
+          settled = true;
+          cleanup();
+          logger.error(
+            "ExecuteAgent stream ended before the run's execution id arrived",
+          );
+          reject(
+            new Error(
+              "ExecuteAgent stream ended before the run's execution id arrived",
+            ),
+          );
           return;
         }
         void probePersistedTerminalState("stream_end");
