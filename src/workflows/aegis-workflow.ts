@@ -94,6 +94,21 @@ Handlebars.registerHelper("keys", (obj: any) => {
   return "[]";
 });
 
+/**
+ * The keys a System state's `update_blackboard` never writes (AEGIS ADR-139
+ * Updates, W1): each is set by the interpreter when the blackboard is built
+ * and read by it or by the templates. A state's name is reserved as well,
+ * because the state's result is stored under it.
+ */
+const RESERVED_BLACKBOARD_KEYS: ReadonlySet<string> = new Set([
+  "input",
+  "intent",
+  "tenant_id",
+  "attachments",
+  "workflow",
+  "blackboard",
+]);
+
 interface GenericWorkflowInput {
   workflow_id: string;
   input: Record<string, any>;
@@ -317,6 +332,7 @@ export async function aegis_workflow(
         emit,
         executionId,
         humanSignal,
+        Object.keys(definition.states),
         security_context_name,
       );
 
@@ -482,6 +498,7 @@ async function executeState(
   emit: (eventType: string, extra?: any) => Promise<void>,
   executionId: string,
   humanSignal: { getResponse: () => string | null; clearResponse: () => void },
+  stateNames: readonly string[],
   securityContextName?: string,
 ): Promise<any> {
   switch (state.kind) {
@@ -723,6 +740,24 @@ async function executeState(
         throw new Error(
           `Template resolution failed: "${state.command}" resolved to empty string. Check blackboard keys.`,
         );
+      }
+      // `update_blackboard` is the interpreter's own command (AEGIS ADR-139
+      // Updates, W1): the rendered env is written onto the blackboard's top
+      // level, so a later state reads it as `{{blackboard.<key>}}`. No process
+      // runs. A reserved key fails the state before any key is written.
+      if (resolvedCommand.trim() === "update_blackboard") {
+        const keys = Object.keys(env);
+        for (const key of keys) {
+          if (RESERVED_BLACKBOARD_KEYS.has(key) || stateNames.includes(key)) {
+            throw new Error(
+              `update_blackboard cannot write the reserved key '${key}'.`,
+            );
+          }
+        }
+        for (const key of keys) {
+          blackboard[key] = env[key];
+        }
+        return { status: "success", exit_code: 0, updated: keys };
       }
       return await executeSystemCommandActivity({
         command: resolvedCommand,
