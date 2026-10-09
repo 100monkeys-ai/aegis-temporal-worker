@@ -108,6 +108,8 @@ describe("AegisRuntimeClient.executeAgent", () => {
     vi.stubGlobal("fetch", mocks.fetchMock);
     process.env.AEGIS_EXECUTION_FALLBACK_IDLE_MS = "10";
     process.env.AEGIS_EXECUTION_FALLBACK_POLL_MS = "10";
+    delete process.env.AEGIS_EXECUTION_FALLBACK_MAX_POLL_MS;
+    delete process.env.AEGIS_EXECUTION_FALLBACK_MAX_RETRIES;
     process.env.AEGIS_ORCHESTRATOR_URL = "http://orchestrator.test";
   });
 
@@ -422,7 +424,7 @@ describe("AegisRuntimeClient.executeAgent", () => {
     expect(lastEvent.reason).toContain("polling exhausted");
   });
 
-  it("stops polling after max retries and returns a failure result", async () => {
+  it("stops polling after an explicit AEGIS_EXECUTION_FALLBACK_MAX_RETRIES and returns a failure result", async () => {
     vi.useFakeTimers();
     const call = mockCall();
     mocks.executeAgentRpcMock.mockReturnValue(call);
@@ -469,6 +471,226 @@ describe("AegisRuntimeClient.executeAgent", () => {
 
     // Verify fetch was called exactly 3 times (not indefinitely)
     expect(mocks.fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("AegisRuntimeClient.executeAgent: status polling runs to the run's deadline", () => {
+  // The step's timeout plus 60 s: past it, the fallback settles the step
+  // failed and asks the orchestrator to cancel the run.
+  const START = new Date("2026-10-09T16:49:27.000Z");
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    vi.setSystemTime(START);
+    mocks.executeAgentRpcMock.mockReset();
+    mocks.fetchMock.mockReset();
+    mocks.runtimeCtorMock.mockReset();
+    mocks.runtimeCtorMock.mockImplementation(function () {
+      return {
+        ExecuteAgent: mocks.executeAgentRpcMock,
+        close: mocks.closeMock,
+        waitForReady: mocks.waitForReadyMock,
+      };
+    });
+    mocks.waitForReadyMock.mockReset();
+    mocks.waitForReadyMock.mockImplementation(readyChannel);
+    for (const fn of Object.values(mocks.logger)) {
+      fn.mockReset();
+    }
+    vi.stubGlobal("fetch", mocks.fetchMock);
+    process.env.AEGIS_EXECUTION_FALLBACK_IDLE_MS = "10";
+    process.env.AEGIS_EXECUTION_FALLBACK_POLL_MS = "10";
+    // A poll every second at most: 30 polls take about 30 s.
+    process.env.AEGIS_EXECUTION_FALLBACK_MAX_POLL_MS = "1000";
+    delete process.env.AEGIS_EXECUTION_FALLBACK_MAX_RETRIES;
+    process.env.AEGIS_ORCHESTRATOR_URL = "http://orchestrator.test";
+  });
+
+  /** The orchestrator: the run's persisted status, and 200 to a cancel. */
+  function orchestrator(status: () => string) {
+    mocks.fetchMock.mockImplementation(
+      async (_url: string, init?: { method?: string }) =>
+        init?.method === "POST"
+          ? { ok: true, status: 200 }
+          : { ok: true, json: async () => ({ status: status() }) },
+    );
+  }
+
+  const statusReads = () =>
+    mocks.fetchMock.mock.calls.filter(([, init]) => !init?.method);
+  const cancels = () =>
+    mocks.fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
+
+  async function start(
+    request: Record<string, unknown>,
+    hooks?: Record<string, unknown>,
+  ) {
+    const call = mockCall();
+    mocks.executeAgentRpcMock.mockReturnValue(call);
+    const { aegisRuntimeClient } = await import("./client.js");
+    const promise = (
+      aegisRuntimeClient.executeAgent as (
+        request: unknown,
+        hooks?: unknown,
+      ) => Promise<Array<Record<string, unknown>>>
+    )(
+      {
+        agent_id: "agent-1",
+        input: "plan",
+        context_json: "{}",
+        tenant_id: "tenant-a",
+        ...request,
+      },
+      hooks,
+    );
+    let result: Array<Record<string, unknown>> | undefined;
+    void promise.then((events) => (result = events));
+    await callStarted();
+    return { call, promise, settled: () => result };
+  }
+
+  const iterationStarted = (n: number) => ({
+    event: "iteration_started",
+    iteration_started: { execution_id: "run-1", iteration_number: n },
+  });
+
+  it("keeps polling past 30 attempts while the deadline is ahead", async () => {
+    orchestrator(() => "Running");
+    const { call, settled } = await start({ timeout_seconds: 300 });
+    call.emit("data", iterationStarted(1));
+
+    await vi.advanceTimersByTimeAsync(200_000);
+
+    expect(settled()).toBeUndefined();
+    expect(statusReads().length).toBeGreaterThan(30);
+    expect(cancels()).toHaveLength(0);
+  });
+
+  it("settles failed once the step's timeout plus 60 s has passed with no terminal event", async () => {
+    orchestrator(() => "Running");
+    const { call, settled } = await start({ timeout_seconds: 300 });
+    call.emit("data", iterationStarted(1));
+
+    await vi.advanceTimersByTimeAsync(359_000);
+    expect(settled()).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    const events = settled();
+    expect(events?.at(-1)).toMatchObject({
+      event_type: "ExecutionFailed",
+      execution_id: "run-1",
+    });
+    expect(events?.at(-1)?.reason).toContain(
+      "Execution status polling exhausted at the run's deadline 2026-10-09T16:55:27.000Z (the step's timeout of 300 s plus 60 s)",
+    );
+  });
+
+  it("asks the orchestrator once to cancel the run when it settles at the deadline", async () => {
+    orchestrator(() => "Running");
+    const { call, promise } = await start({ timeout_seconds: 300 });
+    call.emit("data", iterationStarted(1));
+
+    await vi.advanceTimersByTimeAsync(361_000);
+    await promise;
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(cancels()).toEqual([
+      [
+        "http://orchestrator.test/v1/executions/run-1/cancel",
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer test-token",
+            "X-Tenant-Id": "tenant-a",
+          },
+        },
+      ],
+    ]);
+  });
+
+  it("settles at once with no cancel when a terminal event arrives during the polling", async () => {
+    orchestrator(() => "Running");
+    const { call, settled } = await start({ timeout_seconds: 300 });
+    call.emit("data", iterationStarted(1));
+
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(settled()).toBeUndefined();
+    call.emit("data", {
+      event: "execution_completed",
+      execution_completed: {
+        execution_id: "run-1",
+        final_output: "recorded",
+        total_iterations: 1,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(settled()?.at(-1)).toMatchObject({
+      event_type: "ExecutionCompleted",
+      final_output: "recorded",
+    });
+    const readsAtSettle = statusReads().length;
+    await vi.advanceTimersByTimeAsync(400_000);
+    expect(statusReads()).toHaveLength(readsAtSettle);
+    expect(cancels()).toHaveLength(0);
+  });
+
+  it("waits out a clerk's quiet 10-minute iterations to its 1,800 s run's own end (run c9995957)", async () => {
+    // Run 36b78341's RECORD step: the clerk c9995957 began at 16:49:27Z, its
+    // iterations failed at 16:59:45Z and 17:09:52Z with nothing on the stream
+    // between, and the orchestrator failed it at its 1,800 s limit, 17:19:27Z.
+    // The step failed at 17:02:02Z, after 30 polls, with the run left running.
+    process.env.AEGIS_EXECUTION_FALLBACK_MAX_POLL_MS = "30000";
+    const runEnd = START.getTime() + 1_800_000;
+    orchestrator(() => (Date.now() >= runEnd ? "Failed" : "Running"));
+    const upstream =
+      'HTTP 502 Bad Gateway — {"error":"upstream_network: Network error: upstream timeout after 300s"}';
+    const iterationFailed = (n: number) => ({
+      event: "iteration_failed",
+      iteration_failed: {
+        execution_id: "run-1",
+        iteration_number: n,
+        error: { message: `Try ${n}: ${upstream}` },
+      },
+    });
+
+    // The Agent state's activity runs 1,800 s plus 60 s.
+    const { call, settled } = await start({}, { stepTimeoutMs: 1_860_000 });
+    call.emit("data", iterationStarted(1));
+    await vi.advanceTimersByTimeAsync(618_000);
+    call.emit("data", iterationFailed(1));
+    call.emit("data", iterationStarted(2));
+    await vi.advanceTimersByTimeAsync(607_000);
+    call.emit("data", iterationFailed(2));
+    call.emit("data", iterationStarted(3));
+
+    // 17:02:02Z, where the step failed, and on to just before the run's end.
+    await vi.advanceTimersByTimeAsync(574_000);
+    expect(settled()).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(settled()?.at(-1)).toMatchObject({
+      event_type: "ExecutionFailed",
+      execution_id: "run-1",
+      reason: `Try 2: ${upstream}`,
+    });
+    expect(cancels()).toHaveLength(0);
+  });
+
+  it("refuses a call that names no step timeout, before any run starts", async () => {
+    const { aegisRuntimeClient } = await import("./client.js");
+
+    await expect(
+      aegisRuntimeClient.executeAgent({
+        agent_id: "agent-1",
+        input: "plan",
+        context_json: "{}",
+      }),
+    ).rejects.toThrow(
+      "ExecuteAgent needs the step's timeout (hooks.stepTimeoutMs or timeout_seconds) to bound its status polling",
+    );
+    expect(mocks.executeAgentRpcMock).not.toHaveBeenCalled();
   });
 });
 
@@ -571,7 +793,12 @@ describe("AegisRuntimeClient's channel", () => {
     const { aegisRuntimeClient } = await import("./client.js");
 
     const error = await aegisRuntimeClient
-      .executeAgent({ agent_id: "a", input: "i", context_json: "{}" })
+      .executeAgent({
+        agent_id: "a",
+        input: "i",
+        context_json: "{}",
+        timeout_seconds: 300,
+      })
       .catch((e: unknown) => e);
 
     expect(error).toMatchObject({
@@ -676,7 +903,10 @@ describe("a settled executeAgent call", () => {
       event: "iteration_started",
       iteration_started: { execution_id: "exec-e", iteration_number: 1 },
     });
-    call.emit("error", Object.assign(new Error("14 UNAVAILABLE"), { code: 14 }));
+    call.emit(
+      "error",
+      Object.assign(new Error("14 UNAVAILABLE"), { code: 14 }),
+    );
     await expect(promise).rejects.toThrow("14 UNAVAILABLE");
 
     expect(call.cancel).toHaveBeenCalledTimes(1);
@@ -719,7 +949,15 @@ describe("AegisRuntimeClient.executeAgent: the run's id and the caller's end", (
         request: unknown,
         hooks?: unknown,
       ) => Promise<unknown[]>
-    )({ agent_id: "agent-1", input: "plan", context_json: "{}" }, hooks);
+    )(
+      {
+        agent_id: "agent-1",
+        input: "plan",
+        context_json: "{}",
+        timeout_seconds: 300,
+      },
+      hooks,
+    );
     await vi.waitFor(() =>
       expect(mocks.executeAgentRpcMock).toHaveBeenCalled(),
     );

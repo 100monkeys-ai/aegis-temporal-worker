@@ -520,7 +520,8 @@ describe("an agent run starts once per step", () => {
     controller = new AbortController();
     heartbeat = vi.fn();
     activityContext.current = {
-      info: { heartbeatDetails },
+      // An Agent state's activity for a 1,800 s run: its limit plus 60 s.
+      info: { heartbeatDetails, startToCloseTimeoutMs: 1_860_000 },
       heartbeat,
       cancellationSignal: controller.signal,
     };
@@ -654,6 +655,25 @@ describe("an agent run starts once per step", () => {
 
     expect(cancelMock).toHaveBeenCalledWith("run-1", "tenant-a");
     expect(failure).toBeInstanceOf(CancelledFailure);
+  });
+
+  it("gives the client its own start-to-close as the step's timeout, which bounds the status polling", async () => {
+    inActivity();
+    executeAgentMock.mockResolvedValue([
+      {
+        event_type: "ExecutionCompleted",
+        execution_id: "run-1",
+        timestamp: "2026-10-09T00:00:00Z",
+        final_output: "ok",
+        total_iterations: 1,
+      },
+    ]);
+
+    await executeAgentActivity({ agentId: AGENT, input: "task", context: {} });
+
+    expect(executeAgentMock.mock.calls[0][1]).toMatchObject({
+      stepTimeoutMs: 1_860_000,
+    });
   });
 
   it("sends no timeout_seconds: the orchestrator bounds the run by the agent's own limit", async () => {

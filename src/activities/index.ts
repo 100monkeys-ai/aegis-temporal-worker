@@ -351,6 +351,8 @@ export async function executeAgentActivity(params: {
         beat();
       },
       signal: activity?.cancellationSignal,
+      // The status polling's deadline is this activity's own limit plus 60 s.
+      stepTimeoutMs: activity?.info.startToCloseTimeoutMs,
     });
 
     // Extract final result from events

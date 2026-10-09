@@ -58,10 +58,20 @@ const EXECUTION_FALLBACK_MAX_POLL_MS = Number.parseInt(
   10,
 );
 
-const EXECUTION_FALLBACK_MAX_RETRIES = Number.parseInt(
-  process.env.AEGIS_EXECUTION_FALLBACK_MAX_RETRIES ?? "30",
-  10,
-);
+/**
+ * An upper bound on status polls, only when it is set explicitly (tests set
+ * it). Unset, the polling runs to the run's deadline.
+ */
+const EXECUTION_FALLBACK_MAX_RETRIES = process.env
+  .AEGIS_EXECUTION_FALLBACK_MAX_RETRIES
+  ? Number.parseInt(process.env.AEGIS_EXECUTION_FALLBACK_MAX_RETRIES, 10)
+  : undefined;
+
+/**
+ * The time past the step's own timeout the status polling waits for the run
+ * to reach a terminal state. Past it, the step fails and the run is cancelled.
+ */
+export const EXECUTION_FALLBACK_DEADLINE_MARGIN_MS = 60_000;
 
 interface PersistedExecutionStatusResponse {
   status?: string;
@@ -111,6 +121,12 @@ export interface ExecuteAgentHooks {
   onRunId?: (executionId: string) => void;
   /** Aborting ends the stream and rejects the call; the run is not cancelled. */
   signal?: AbortSignal;
+  /**
+   * The step's configured timeout in ms, as the caller knows it (the agent
+   * activity's start-to-close). Without it, the request's timeout_seconds.
+   * The status polling runs until this plus 60 s from the call's start.
+   */
+  stepTimeoutMs?: number;
 }
 
 async function fetchPersistedExecutionStatus(
@@ -299,6 +315,17 @@ class AegisRuntimeClient {
     request: ExecuteAgentRequest,
     hooks: ExecuteAgentHooks = {},
   ): Promise<ExecutionEvent[]> {
+    const stepTimeoutMs =
+      hooks.stepTimeoutMs ??
+      (request.timeout_seconds ? request.timeout_seconds * 1000 : undefined);
+    if (!stepTimeoutMs || stepTimeoutMs <= 0) {
+      throw new Error(
+        "ExecuteAgent needs the step's timeout (hooks.stepTimeoutMs or timeout_seconds) to bound its status polling",
+      );
+    }
+    const deadlineMs =
+      Date.now() + stepTimeoutMs + EXECUTION_FALLBACK_DEADLINE_MARGIN_MS;
+
     const token = await getServiceToken();
     const metadata = new grpc.Metadata();
     metadata.add("authorization", `Bearer ${token}`);
@@ -354,7 +381,11 @@ class AegisRuntimeClient {
         // forwarding events; the execution is not cancelled by this.
         call.on("error", (error: Error & { code?: number }) => {
           logger.debug(
-            { code: error.code, error: error.message, execution_id: executionId },
+            {
+              code: error.code,
+              error: error.message,
+              execution_id: executionId,
+            },
             "ExecuteAgent stream ended after the call settled",
           );
         });
@@ -400,38 +431,90 @@ class AegisRuntimeClient {
 
       let pollAttempt = 0;
 
+      /**
+       * Settle the step failed: the persisted status never became terminal.
+       * Past the run's deadline, the orchestrator is first asked to cancel
+       * the run, so that no run outlives its failed step.
+       */
+      const settlePollingExhausted = (reason: string, cancelRun: boolean) => {
+        if (settled || !executionId) {
+          return;
+        }
+        const runId = executionId;
+        events.push({
+          event_type: "ExecutionFailed",
+          execution_id: runId,
+          timestamp: new Date().toISOString(),
+          reason,
+          total_iterations: highestIteration(events),
+        });
+        if (!cancelRun) {
+          settleWithEvents(
+            events,
+            "Agent execution failed: status polling exhausted",
+            "error",
+          );
+          return;
+        }
+        // Settled from here: nothing else may settle the call meanwhile.
+        settled = true;
+        cleanup();
+        void cancelAgentExecution(runId, request.tenant_id)
+          .then(
+            () =>
+              logger.warn(
+                { execution_id: runId },
+                "Asked the orchestrator to cancel the agent run past its deadline",
+              ),
+            (error: unknown) =>
+              logger.error(
+                {
+                  execution_id: runId,
+                  error: error instanceof Error ? error.message : String(error),
+                },
+                "The orchestrator did not cancel the agent run past its deadline",
+              ),
+          )
+          .finally(() => {
+            logger.error(
+              { execution_id: runId, event_count: events.length, reason },
+              "Agent execution failed: status polling exhausted",
+            );
+            resolve(events);
+          });
+      };
+
       const scheduleNextPoll = () => {
         if (settled || !executionId || pollTimer) {
           return;
         }
 
-        if (pollAttempt >= EXECUTION_FALLBACK_MAX_RETRIES) {
-          if (!settled) {
-            const totalIterations = events.reduce(
-              (max, e) => Math.max(max, e.iteration_number ?? 0),
-              0,
-            );
-            const failEvent: ExecutionEvent = {
-              event_type: "ExecutionFailed",
-              execution_id: executionId,
-              timestamp: new Date().toISOString(),
-              reason: `Execution status polling exhausted after ${pollAttempt} attempts`,
-              total_iterations: totalIterations,
-            };
-            events.push(failEvent);
-            settleWithEvents(
-              events,
-              "Agent execution failed: status polling exhausted",
-              "error",
-            );
-          }
+        if (
+          EXECUTION_FALLBACK_MAX_RETRIES !== undefined &&
+          pollAttempt >= EXECUTION_FALLBACK_MAX_RETRIES
+        ) {
+          settlePollingExhausted(
+            `Execution status polling exhausted after ${pollAttempt} attempts`,
+            false,
+          );
           return;
         }
 
-        // Exponential backoff: base * 2^attempt, capped at max
+        const untilDeadlineMs = deadlineMs - Date.now();
+        if (untilDeadlineMs <= 0) {
+          settlePollingExhausted(
+            `Execution status polling exhausted at the run's deadline ${new Date(deadlineMs).toISOString()} (the step's timeout of ${stepTimeoutMs / 1000} s plus ${EXECUTION_FALLBACK_DEADLINE_MARGIN_MS / 1000} s) with no terminal state after ${pollAttempt} polls`,
+            true,
+          );
+          return;
+        }
+
+        // Exponential backoff: base * 2^attempt, capped at max, and the last
+        // poll at the deadline itself.
         const backoffMs = Math.min(
           EXECUTION_FALLBACK_POLL_MS * Math.pow(2, pollAttempt),
           EXECUTION_FALLBACK_MAX_POLL_MS,
+          untilDeadlineMs,
         );
 
         pollTimer = setTimeout(() => {
