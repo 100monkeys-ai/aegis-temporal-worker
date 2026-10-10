@@ -17,6 +17,9 @@ import type {
   ExecuteContainerRunRequest,
   ExecuteContainerRunResponse,
   ContainerRunConfig,
+  RepositoryAction,
+  RunRepositoryActionRequest,
+  RunRepositoryActionResponse,
 } from "../types.js";
 import { fetchWorkflowDefinition } from "./workflow-activities.js";
 
@@ -449,6 +452,49 @@ export async function executeSystemCommandActivity(params: {
     );
     throw error;
   }
+}
+
+/**
+ * Run one of the workflow interpreter's repository steps on the repository the
+ * workflow run holds (RunRepositoryAction): `diff`, `commit` (with its message)
+ * or `land`. A refusal is answered, not thrown: its `sentence` is the
+ * orchestrator's, and the workflow fails the state with it.
+ */
+export async function runRepositoryActionActivity(params: {
+  workflow_execution_id: string;
+  action: RepositoryAction;
+  message?: string;
+  tenant_id?: string;
+}): Promise<RunRepositoryActionResponse> {
+  logger.info(
+    {
+      workflow_execution_id: params.workflow_execution_id,
+      action: params.action,
+    },
+    "Executing repository action activity",
+  );
+
+  const request: RunRepositoryActionRequest = {
+    workflow_execution_id: params.workflow_execution_id,
+    action: params.action,
+  };
+  if (params.action === "commit" && params.message !== undefined) {
+    request.message = params.message;
+  }
+
+  const response = await aegisRuntimeClient.runRepositoryAction(
+    request,
+    params.tenant_id || undefined,
+  );
+
+  // An optional field the orchestrator did not set is absent, never "".
+  return {
+    commit_sha: response.commit_sha || undefined,
+    branch: response.branch ?? "",
+    ref: response.ref ?? "",
+    diff: response.diff || undefined,
+    sentence: response.sentence || undefined,
+  };
 }
 
 /**

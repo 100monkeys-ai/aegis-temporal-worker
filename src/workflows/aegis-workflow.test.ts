@@ -14,6 +14,7 @@ const { activityMocks, terminalActivityMocks, executeAgentRpcMock } =
       executeContainerRunActivity: vi.fn(),
       executeParallelContainerRunActivity: vi.fn(),
       executeOutputHandlerActivity: vi.fn(),
+      runRepositoryActionActivity: vi.fn(),
       createEphemeralWorkspaceActivity: vi.fn(),
       destroyWorkspaceVolumeActivity: vi.fn(),
     },
@@ -2846,5 +2847,372 @@ describe("an Agent state's activity limit follows its agent's run limit", () => 
       retry: { maximumAttempts: 1 },
     });
     expect(terminalActivityMocks.executeAgentActivity).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The Forge's repository steps: `repository_diff`, `repository_commit` and
+// `repository_land` are the interpreter's own System commands, answered by the
+// orchestrator's RunRepositoryAction on the run's repository and never sent to
+// a shell.
+describe("repository steps are the interpreter's own commands", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.executeSystemCommandActivity.mockResolvedValue({
+      status: "success",
+      exit_code: 0,
+      stdout: "",
+      stderr: "",
+    });
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "completed",
+      output: "{}",
+      iterations: 1,
+    });
+  });
+
+  it.each([
+    ["repository_diff", "diff"],
+    ["repository_commit", "commit"],
+    ["repository_land", "land"],
+  ])(
+    "'%s' calls the repository action '%s' for the run, and never a system command",
+    async (command, action) => {
+      activityMocks.runRepositoryActionActivity.mockResolvedValue({
+        commit_sha: action === "diff" ? undefined : "abc1234",
+        branch: "aegis/run-exec-123",
+        ref: "main",
+        diff: action === "diff" ? "diff --git a/x b/x" : undefined,
+      });
+      activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+        baseDefinition(
+          {
+            STEP: {
+              kind: "System",
+              command,
+              env: { message: "the-forge: {{input.task}}" },
+              transitions: [],
+            },
+          },
+          "STEP",
+        ),
+      );
+
+      const result = await aegis_workflow({
+        workflow_id: "wf-1",
+        input: { task: "name the judge" },
+        tenant_id: "tenant-a",
+      });
+
+      expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
+      expect(activityMocks.runRepositoryActionActivity).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(activityMocks.runRepositoryActionActivity).toHaveBeenCalledWith({
+        workflow_execution_id: "exec-123",
+        action,
+        message: action === "commit" ? "the-forge: name the judge" : undefined,
+        tenant_id: "tenant-a",
+      });
+      expect(result.status).toBe("completed");
+      expect(result.blackboard?.STEP).toEqual({
+        status: "success",
+        exit_code: 0,
+        output: {
+          commit_sha: action === "diff" ? undefined : "abc1234",
+          branch: "aegis/run-exec-123",
+          ref: "main",
+          diff: action === "diff" ? "diff --git a/x b/x" : undefined,
+        },
+      });
+    },
+  );
+
+  it("a later state reads the diff as {{DIFF.output.diff}}", async () => {
+    activityMocks.runRepositoryActionActivity.mockResolvedValue({
+      branch: "aegis/run-exec-123",
+      ref: "main",
+      diff: "+one line",
+    });
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          DIFF: {
+            kind: "System",
+            command: "repository_diff",
+            transitions: [{ condition: "on_success", target: "AUDIT" }],
+          },
+          AUDIT: {
+            kind: "Agent",
+            agent: "code-reviewer-agent",
+            input: "review: {{DIFF.output.diff}}",
+            transitions: [],
+          },
+        },
+        "DIFF",
+      ),
+    );
+
+    await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(activityMocks.executeAgentActivity.mock.calls[0][0].input).toBe(
+      "review: +one line",
+    );
+  });
+
+  it("an answer's sentence fails the state with that sentence, and on_failure takes it", async () => {
+    const sentence =
+      "the remote branch 'main' has commits this run does not have; nothing was landed";
+    activityMocks.runRepositoryActionActivity.mockResolvedValue({
+      branch: "aegis/run-exec-123",
+      ref: "main",
+      sentence,
+    });
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          LAND: {
+            kind: "System",
+            command: "repository_land",
+            transitions: [
+              { condition: "on_success", target: "COMPLETE" },
+              { condition: "on_failure", target: "LAND_REFUSED" },
+            ],
+          },
+          COMPLETE: {
+            kind: "Agent",
+            agent: "complete",
+            input: "landed",
+            transitions: [],
+          },
+          LAND_REFUSED: {
+            kind: "Agent",
+            agent: "refused",
+            input: "refused: {{{LAND.output.sentence}}}",
+            transitions: [],
+          },
+        },
+        "LAND",
+      ),
+    );
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.final_state).toBe("LAND_REFUSED");
+    expect(result.blackboard?.LAND).toEqual({
+      status: "failed",
+      exit_code: 1,
+      error: sentence,
+      output: {
+        commit_sha: undefined,
+        branch: "aegis/run-exec-123",
+        ref: "main",
+        diff: undefined,
+        sentence,
+      },
+    });
+    expect(activityMocks.executeAgentActivity.mock.calls[0][0].input).toBe(
+      `refused: ${sentence}`,
+    );
+    expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
+  });
+
+  it("every other command still runs through the system command activity", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          RUN: {
+            kind: "System",
+            command: "repository_diff --stat",
+            transitions: [],
+          },
+        },
+        "RUN",
+      ),
+    );
+
+    await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(activityMocks.runRepositoryActionActivity).not.toHaveBeenCalled();
+    expect(activityMocks.executeSystemCommandActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "repository_diff --stat" }),
+    );
+  });
+});
+
+// The Forge's EXECUTE_TESTS: a ContainerRun step's `repository` volume and its
+// `network_mode` reach the orchestrator as the manifest names them; the
+// orchestrator mounts the run's repository and picks the step network.
+describe("a ContainerRun step's repository volume and network mode", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.executeContainerRunActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "ok",
+      stderr: "",
+      duration_ms: 10,
+      attempts: 1,
+    });
+  });
+
+  it("passes `repository`, `repository:<label>` and `network_mode: egress` through unchanged", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          EXECUTE_TESTS: {
+            kind: "ContainerRun",
+            container_run_image: "python:3.11-slim",
+            container_run_command: ["pytest"],
+            container_run_shell: true,
+            container_run_volumes: [
+              {
+                name: "repository",
+                mount_path: "/workspace",
+                read_only: false,
+              },
+              {
+                name: "repository:docs",
+                mount_path: "/docs",
+                read_only: true,
+              },
+            ],
+            container_run_network_mode: "egress",
+            transitions: [],
+          },
+        },
+        "EXECUTE_TESTS",
+      ),
+    );
+
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {},
+      // A blackboard key of a volume-id's shape never renames the run's repository.
+      blackboard: { repository_volume_id: "vol-other" },
+    });
+
+    const call = activityMocks.executeContainerRunActivity.mock.calls[0][0];
+    expect(call.volumes).toEqual([
+      { name: "repository", mount_path: "/workspace", read_only: false },
+      { name: "repository:docs", mount_path: "/docs", read_only: true },
+    ]);
+    expect(call.network_mode).toBe("egress");
+  });
+
+  it("sends no network_mode when the state names none", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          BUILD: {
+            kind: "ContainerRun",
+            container_run_image: "node:24",
+            container_run_command: ["npm", "test"],
+            transitions: [],
+          },
+        },
+        "BUILD",
+      ),
+    );
+
+    await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    const call = activityMocks.executeContainerRunActivity.mock.calls[0][0];
+    expect(call.network_mode).toBeUndefined();
+  });
+});
+
+// The Forge's repository entry on the blackboard: the run's first prepared
+// repository, with its path inside the step's container, and nothing more.
+describe("the run's repository on the blackboard", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "completed",
+      output: "{}",
+      iterations: 1,
+    });
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          ANALYZE: {
+            kind: "Agent",
+            agent: "requirements-analyst",
+            input: "read {{repository.path}} on {{repository.branch}}",
+            transitions: [],
+          },
+        },
+        "ANALYZE",
+      ),
+    );
+  });
+
+  it("writes the first prepared entry as `repository`, with no binding and no author", async () => {
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {},
+      repositories: [
+        {
+          binding_id: "0b5f1c9e-2a54-4f43-9c43-7d3f1d6e2a10",
+          branch: "aegis/run-exec-123",
+          author: { name: "Jeshua", email: "jeshua@100monkeys.ai" },
+          label: "aegis-examples",
+          ref: "main",
+          started_from: "352a61f3",
+        },
+        {
+          binding_id: "6f1d0b8e-9c7a-4a8e-8b3e-2d4c5f6a7b8c",
+          branch: "aegis/run-exec-123",
+          label: "second",
+          ref: "main",
+          started_from: "0000000",
+        },
+      ],
+    });
+
+    expect(result.blackboard?.repository).toEqual({
+      label: "aegis-examples",
+      path: "/workspace/aegis-examples",
+      branch: "aegis/run-exec-123",
+      ref: "main",
+      started_from: "352a61f3",
+    });
+    expect(activityMocks.executeAgentActivity.mock.calls[0][0].input).toBe(
+      "read /workspace/aegis-examples on aegis/run-exec-123",
+    );
+  });
+
+  it("writes nulls for the fields the entry does not carry", async () => {
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {},
+      repositories: [
+        {
+          binding_id: "0b5f1c9e-2a54-4f43-9c43-7d3f1d6e2a10",
+          branch: "aegis/run-exec-123",
+        },
+      ],
+    });
+
+    expect(result.blackboard?.repository).toEqual({
+      label: null,
+      path: null,
+      branch: "aegis/run-exec-123",
+      ref: null,
+      started_from: null,
+    });
+  });
+
+  it("writes no `repository` for a run that holds none", async () => {
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.blackboard).not.toHaveProperty("repository");
   });
 });

@@ -15,6 +15,9 @@ import type {
   TransitionRule,
   JudgeConfig,
   ContainerRunStateResult,
+  BlackboardRepository,
+  RepositoryAction,
+  RunRepositoryEntry,
 } from "../types.js";
 import * as activities from "../activities/index.js";
 
@@ -65,6 +68,7 @@ const {
   executeContainerRunActivity,
   executeParallelContainerRunActivity,
   executeOutputHandlerActivity,
+  runRepositoryActionActivity,
 } = agentActivities;
 
 const workspaceActivities = proxyActivities<{
@@ -127,6 +131,48 @@ const RESERVED_BLACKBOARD_KEYS: ReadonlySet<string> = new Set([
   "blackboard",
 ]);
 
+/**
+ * The workflow interpreter's own repository steps: a System state whose
+ * rendered command is one of these runs the action on the repository the run
+ * holds, through the orchestrator's RunRepositoryAction, and never a shell.
+ */
+const REPOSITORY_COMMANDS: Readonly<Record<string, RepositoryAction>> = {
+  repository_diff: "diff",
+  repository_commit: "commit",
+  repository_land: "land",
+};
+
+/**
+ * Whether a ContainerRun volume entry names the run's repository (`repository`
+ * or `repository:<label>`). The orchestrator mounts it; the worker passes the
+ * name through as written.
+ */
+function namesRunRepository(volumeName: string): boolean {
+  return volumeName === "repository" || volumeName.startsWith("repository:");
+}
+
+/**
+ * The run's repository as the blackboard carries it: the first prepared
+ * entry's label, its path inside a step's container, its work branch, the
+ * binding's ref and the commit the work branch started from. A field the
+ * entry does not carry is null. Nothing else of the entry is copied: no
+ * binding, no author, no credential, no URL.
+ */
+function repositoryOnBlackboard(
+  entry: RunRepositoryEntry,
+): BlackboardRepository {
+  const text = (value: unknown): string | null =>
+    typeof value === "string" && value !== "" ? value : null;
+  const label = text(entry.label);
+  return {
+    label,
+    path: label === null ? null : `/workspace/${label}`,
+    branch: text(entry.branch),
+    ref: text(entry.ref),
+    started_from: text(entry.started_from),
+  };
+}
+
 interface GenericWorkflowInput {
   workflow_id: string;
   input: Record<string, any>;
@@ -147,6 +193,9 @@ interface GenericWorkflowInput {
    * ExecuteAgentRequest.attachments, and merged into INTENT_INPUTS env for
    * ContainerRun states (ADR-087 three-layer hydration). */
   attachments?: import("../types.js").AttachmentRef[];
+  /** The run's repositories as the orchestrator prepared them; the first is
+   *  written onto the blackboard as `repository`. */
+  repositories?: RunRepositoryEntry[];
 }
 
 /**
@@ -167,6 +216,7 @@ export async function aegis_workflow(
     tenant_id,
     security_context_name,
     attachments: argsAttachments,
+    repositories,
   } = args;
   // ADR-113: dispatch-time attachments. Empty array when the dispatch carries
   // none — keeps Handlebars context shape stable so `{{#each attachments}}`
@@ -269,6 +319,10 @@ export async function aegis_workflow(
       storage: definition.spec_storage ?? {},
     },
   };
+  // The run's repository, for `{{repository.path}}` and the rest.
+  if (Array.isArray(repositories) && repositories.length > 0) {
+    blackboard.repository = repositoryOnBlackboard(repositories[0]);
+  }
 
   // 3. Execution Loop
   const DEFAULT_MAX_STATE_VISITS = 5;
@@ -782,6 +836,34 @@ async function executeState(
         }
         return { status: "success", exit_code: 0, updated: keys };
       }
+      // The repository steps are the interpreter's own commands too: the
+      // orchestrator acts on the repository the run holds. A commit's message
+      // is the state's rendered `env.message`. The answer's sentence fails the
+      // state with that sentence, so its on_failure transition takes it.
+      const repositoryAction = REPOSITORY_COMMANDS[resolvedCommand.trim()];
+      if (repositoryAction !== undefined) {
+        const answer = await runRepositoryActionActivity({
+          workflow_execution_id: executionId,
+          action: repositoryAction,
+          message: repositoryAction === "commit" ? env.message : undefined,
+          tenant_id: (blackboard.tenant_id as string | undefined) || undefined,
+        });
+        const output = {
+          commit_sha: answer.commit_sha,
+          branch: answer.branch,
+          ref: answer.ref,
+          diff: answer.diff,
+        };
+        if (answer.sentence) {
+          return {
+            status: "failed",
+            exit_code: 1,
+            error: answer.sentence,
+            output: { ...output, sentence: answer.sentence },
+          };
+        }
+        return { status: "success", exit_code: 0, output };
+      }
       return await executeSystemCommandActivity({
         command: resolvedCommand,
         env,
@@ -925,6 +1007,9 @@ async function executeState(
         env: crEnv,
         workdir: renderedWorkdir,
         volumes: (state.container_run_volumes ?? []).map((vm) => {
+          if (namesRunRepository(vm.name)) {
+            return { ...vm };
+          }
           const resolvedName =
             (blackboard[`${vm.name}_volume_id`] as string | undefined) ??
             vm.name;
@@ -936,6 +1021,7 @@ async function executeState(
         max_attempts: state.container_run_retry?.max_attempts ?? 1,
         security_context_name: securityContextName,
         workflow_execution_id: executionId,
+        network_mode: state.container_run_network_mode,
       });
 
       if (crResult.exit_code === 0) {

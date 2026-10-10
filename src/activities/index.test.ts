@@ -4,10 +4,12 @@ import type { ExecuteContainerRunResponse } from "../types.js";
 const {
   executeContainerRunMock,
   executeAgentMock,
+  runRepositoryActionMock,
   cancelMock,
   activityContext,
 } = vi.hoisted(() => ({
   executeContainerRunMock: vi.fn(),
+  runRepositoryActionMock: vi.fn(),
   executeAgentMock: vi.fn(),
   cancelMock: vi.fn(),
   /** The Temporal activity context the code under test sees; none outside an activity. */
@@ -38,6 +40,7 @@ vi.mock("../grpc/client.js", () => ({
   aegisRuntimeClient: {
     executeContainerRun: executeContainerRunMock,
     executeAgent: executeAgentMock,
+    runRepositoryAction: runRepositoryActionMock,
     executeSystemCommand: vi.fn(),
     validateWithJudges: vi.fn(),
     storeTrajectoryPattern: vi.fn(),
@@ -752,4 +755,97 @@ describe("agentRunLimitSecondsActivity", () => {
       );
     },
   );
+});
+
+// The Forge's repository steps (RunRepositoryAction): the activity names the
+// run and the action, and answers the orchestrator's fields as it gave them.
+describe("runRepositoryActionActivity", () => {
+  beforeEach(() => {
+    runRepositoryActionMock.mockReset();
+  });
+
+  it("sends the run, the action and the commit's message, in the run's tenant", async () => {
+    runRepositoryActionMock.mockResolvedValue({
+      commit_sha: "abc1234",
+      branch: "aegis/run-exec-1",
+      ref: "main",
+    });
+
+    const answer = await activitiesModule.runRepositoryActionActivity({
+      workflow_execution_id: "exec-1",
+      action: "commit",
+      message: "the-forge: name the judge",
+      tenant_id: "tenant-a",
+    });
+
+    expect(runRepositoryActionMock).toHaveBeenCalledWith(
+      {
+        workflow_execution_id: "exec-1",
+        action: "commit",
+        message: "the-forge: name the judge",
+      },
+      "tenant-a",
+    );
+    expect(answer).toEqual({
+      commit_sha: "abc1234",
+      branch: "aegis/run-exec-1",
+      ref: "main",
+      diff: undefined,
+      sentence: undefined,
+    });
+  });
+
+  it("sends no message for a diff or a landing", async () => {
+    runRepositoryActionMock.mockResolvedValue({
+      branch: "aegis/run-exec-1",
+      ref: "main",
+      diff: "+x",
+    });
+
+    await activitiesModule.runRepositoryActionActivity({
+      workflow_execution_id: "exec-1",
+      action: "diff",
+      message: "ignored",
+    });
+
+    expect(runRepositoryActionMock).toHaveBeenCalledWith(
+      { workflow_execution_id: "exec-1", action: "diff" },
+      undefined,
+    );
+  });
+
+  it("answers the refusal's sentence, and no empty field as a value", async () => {
+    runRepositoryActionMock.mockResolvedValue({
+      commit_sha: "",
+      branch: "",
+      ref: "",
+      diff: "",
+      sentence: "this run holds no repository",
+      _sentence: "sentence",
+    });
+
+    const answer = await activitiesModule.runRepositoryActionActivity({
+      workflow_execution_id: "exec-1",
+      action: "land",
+    });
+
+    expect(answer).toEqual({
+      commit_sha: undefined,
+      branch: "",
+      ref: "",
+      diff: undefined,
+      sentence: "this run holds no repository",
+    });
+  });
+
+  it("throws the transport's error", async () => {
+    runRepositoryActionMock.mockRejectedValue(new Error("UNAVAILABLE"));
+
+    await expect(
+      activitiesModule.runRepositoryActionActivity({
+        workflow_execution_id: "exec-1",
+        action: "diff",
+      }),
+    ).rejects.toThrow("UNAVAILABLE");
+  });
 });

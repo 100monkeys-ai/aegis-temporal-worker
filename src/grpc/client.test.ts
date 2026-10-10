@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   waitForReadyMock: vi.fn(),
   createInsecureMock: vi.fn(() => "insecure-creds"),
   runtimeCtorMock: vi.fn(),
+  metadataAddMock: vi.fn(),
   logger: {
     info: vi.fn(),
     error: vi.fn(),
@@ -35,7 +36,11 @@ vi.mock("@grpc/grpc-js", () => ({
     },
   })),
   Metadata: class {
-    add(_key: string, _value: string) {}
+    entries: Array<[string, string]> = [];
+    add(key: string, value: string) {
+      this.entries.push([key, value]);
+      mocks.metadataAddMock(key, value);
+    }
   },
 }));
 
@@ -1076,5 +1081,95 @@ describe("cancelAgentExecution", () => {
     await expect(cancel("run-1", "tenant-a")).rejects.toThrow(
       "The orchestrator refused to cancel execution run-1 (HTTP 403)",
     );
+  });
+});
+
+describe("AegisRuntimeClient.runRepositoryAction", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mocks.runtimeCtorMock.mockReset();
+    mocks.metadataAddMock.mockReset();
+    for (const fn of Object.values(mocks.logger)) {
+      fn.mockReset();
+    }
+  });
+
+  function runtimeWith(rpc: ReturnType<typeof vi.fn>) {
+    mocks.runtimeCtorMock.mockImplementation(function () {
+      return {
+        RunRepositoryAction: rpc,
+        close: mocks.closeMock,
+        waitForReady: readyChannel,
+      };
+    });
+  }
+
+  it("calls RunRepositoryAction with the request, the token and the run's tenant", async () => {
+    const rpc = vi.fn((_req: any, _meta: any, cb: any) => {
+      cb(null, {
+        commit_sha: "abc1234",
+        branch: "aegis/run-exec-1",
+        ref: "main",
+      });
+    });
+    runtimeWith(rpc);
+
+    const { aegisRuntimeClient } = await import("./client.js");
+    const answer = await aegisRuntimeClient.runRepositoryAction(
+      {
+        workflow_execution_id: "exec-1",
+        action: "commit",
+        message: "the-forge: name the judge",
+      },
+      "tenant-a",
+    );
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc.mock.calls[0][0]).toEqual({
+      workflow_execution_id: "exec-1",
+      action: "commit",
+      message: "the-forge: name the judge",
+    });
+    expect(rpc.mock.calls[0][1].entries).toEqual([
+      ["authorization", "Bearer test-token"],
+      ["x-tenant-id", "tenant-a"],
+    ]);
+    expect(answer).toEqual({
+      commit_sha: "abc1234",
+      branch: "aegis/run-exec-1",
+      ref: "main",
+    });
+  });
+
+  it("sends no tenant header when the run names no tenant", async () => {
+    const rpc = vi.fn((_req: any, _meta: any, cb: any) => {
+      cb(null, { branch: "b", ref: "main", diff: "+x" });
+    });
+    runtimeWith(rpc);
+
+    const { aegisRuntimeClient } = await import("./client.js");
+    await aegisRuntimeClient.runRepositoryAction({
+      workflow_execution_id: "exec-1",
+      action: "diff",
+    });
+
+    expect(rpc.mock.calls[0][1].entries).toEqual([
+      ["authorization", "Bearer test-token"],
+    ]);
+  });
+
+  it("rejects with the transport's error", async () => {
+    const rpc = vi.fn((_req: any, _meta: any, cb: any) => {
+      cb(new Error("NOT_FOUND: workflow execution"), undefined);
+    });
+    runtimeWith(rpc);
+
+    const { aegisRuntimeClient } = await import("./client.js");
+    await expect(
+      aegisRuntimeClient.runRepositoryAction({
+        workflow_execution_id: "exec-1",
+        action: "land",
+      }),
+    ).rejects.toThrow("NOT_FOUND: workflow execution");
   });
 });

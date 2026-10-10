@@ -26,6 +26,8 @@ import type {
   ExecuteContainerRunResponse,
   InvokeOutputHandlerRequest,
   InvokeOutputHandlerResponse,
+  RunRepositoryActionRequest,
+  RunRepositoryActionResponse,
 } from "../types.js";
 
 // Load protobuf definition
@@ -1000,6 +1002,54 @@ class AegisRuntimeClient {
                 success: response.success,
               },
               "Output handler invoked",
+            );
+            resolve(response);
+          }
+        },
+      );
+    });
+  }
+
+  /**
+   * Run one of the workflow interpreter's repository steps (`diff`, `commit`
+   * or `land`) on the repository the workflow run holds. The worker's service
+   * account acts in the run's tenant, named by `x-tenant-id`.
+   */
+  async runRepositoryAction(
+    request: RunRepositoryActionRequest,
+    tenantId?: string,
+  ): Promise<RunRepositoryActionResponse> {
+    const token = await getServiceToken();
+    const meta = new grpc.Metadata();
+    meta.add("authorization", `Bearer ${token}`);
+    if (tenantId) {
+      meta.add("x-tenant-id", tenantId);
+    }
+    await this.waitForChannel("RunRepositoryAction");
+    return new Promise((resolve, reject) => {
+      this.client.RunRepositoryAction(
+        request,
+        meta,
+        (error: Error | null, response: RunRepositoryActionResponse) => {
+          if (error) {
+            logger.error(
+              {
+                error,
+                workflow_execution_id: request.workflow_execution_id,
+                action: request.action,
+              },
+              "Repository action failed",
+            );
+            reject(error);
+          } else {
+            logger.info(
+              {
+                workflow_execution_id: request.workflow_execution_id,
+                action: request.action,
+                commit_sha: response.commit_sha,
+                refused: Boolean(response.sentence),
+              },
+              "Repository action answered",
             );
             resolve(response);
           }

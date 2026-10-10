@@ -121,6 +121,9 @@ export interface ExecuteContainerRunRequest {
   security_context_name?: string;
   /** The workflow execution ID for correlating container runs back to their parent workflow. */
   workflow_execution_id?: string;
+  /** The step's network mode as the manifest names it (`egress` runs it on
+   *  the node's step network); absent means the default. */
+  network_mode?: string;
 }
 
 /**
@@ -248,6 +251,8 @@ export interface WorkflowState {
   container_run_registry_credentials?: string;
   container_run_retry?: RetryConfig;
   container_run_shell?: boolean;
+  /** The step's network mode as the manifest names it, e.g. `egress`. */
+  container_run_network_mode?: string;
 
   // ParallelContainerRun-specific fields (ADR-050)
   parallel_container_steps?: ContainerRunConfig[];
@@ -539,6 +544,67 @@ export interface ExecuteSystemCommandRequest {
   env?: Record<string, string>;
   workdir?: string;
   timeout_seconds?: number;
+}
+
+/**
+ * One of the workflow interpreter's own repository steps, run on the
+ * repository the workflow run holds through RunRepositoryAction.
+ */
+export type RepositoryAction = "diff" | "commit" | "land";
+
+/**
+ * gRPC request for RunRepositoryAction. Maps directly to proto
+ * RunRepositoryActionRequest.
+ */
+export interface RunRepositoryActionRequest {
+  workflow_execution_id: string;
+  action: RepositoryAction;
+  /** The commit message, for `commit` only. */
+  message?: string;
+}
+
+/**
+ * gRPC response from RunRepositoryAction. Maps directly to proto
+ * RunRepositoryActionResponse; the optional fields are absent when the
+ * orchestrator did not set them.
+ */
+export interface RunRepositoryActionResponse {
+  /** The commit made (`commit`) or landed (`land`). */
+  commit_sha?: string;
+  /** The run's work branch. */
+  branch: string;
+  /** The binding's ref, the branch a landing fast-forwards. */
+  ref: string;
+  /** The unified diff, for `diff` only. */
+  diff?: string;
+  /** The refusal, in the orchestrator's words, when the step did not act. */
+  sentence?: string;
+}
+
+/**
+ * One repository a workflow run holds, as the orchestrator prepared it. The
+ * worker reads only the fields the blackboard's `repository` carries.
+ */
+export interface RunRepositoryEntry {
+  binding_id?: string;
+  branch?: string;
+  label?: string;
+  ref?: string;
+  started_from?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * The run's repository on the blackboard, `{{repository.path}}` and the rest.
+ * A field the prepared entry does not carry is null. No credential and no URL
+ * is on it.
+ */
+export interface BlackboardRepository {
+  label: string | null;
+  path: string | null;
+  branch: string | null;
+  ref: string | null;
+  started_from: string | null;
 }
 
 /**
