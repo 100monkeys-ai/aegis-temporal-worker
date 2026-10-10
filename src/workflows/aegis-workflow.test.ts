@@ -71,7 +71,7 @@ vi.mock("@temporalio/workflow", () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-import { proxyActivities } from "@temporalio/workflow";
+import { condition, proxyActivities, setHandler } from "@temporalio/workflow";
 import { aegis_workflow } from "./aegis-workflow.js";
 
 function baseDefinition(
@@ -3214,5 +3214,165 @@ describe("the run's repository on the blackboard", () => {
     const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
 
     expect(result.blackboard).not.toHaveProperty("repository");
+  });
+});
+
+// The Forge's two gates: a person at a Human state reads the prompt rendered
+// against the blackboard, and a "no" carries the person's words back into the
+// state it re-enters, through the transition's `feedback:`.
+describe("a Human gate shows its rendered prompt and carries the person's feedback", () => {
+  /** The signals a person sends, one per Human state reached, in order. */
+  let signals: Array<[string, string?]>;
+
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    vi.mocked(setHandler).mockClear();
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "completed",
+      output: { summary: "R1. The judge is code-quality-judge." },
+      iterations: 1,
+    });
+    signals = [];
+    // A Human state waits on its signal: deliver the next one to the
+    // workflow's registered `humanInput` handler, then read the predicate.
+    vi.mocked(condition).mockImplementation((async (
+      predicate: () => boolean,
+    ) => {
+      const next = signals.shift();
+      if (next) {
+        const handler = vi.mocked(setHandler).mock.calls.at(-1)?.[1] as (
+          ...args: Array<string | undefined>
+        ) => void;
+        handler(...next);
+      }
+      return predicate();
+    }) as typeof condition);
+  });
+
+  function gateDefinition(analyzeInput: string) {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          ANALYZE: {
+            kind: "Agent",
+            agent: "requirements-analyst",
+            input: analyzeInput,
+            transitions: [{ condition: "on_success", target: "APPROVE" }],
+          },
+          APPROVE: {
+            kind: "Human",
+            timeout: "3600s",
+            prompt:
+              "Approve the requirements for {{input.task}}:\n{{ANALYZE.output.summary}}",
+            transitions: [
+              { condition: "input_equals_yes", target: "DONE" },
+              {
+                condition: "input_equals_no",
+                target: "ANALYZE",
+                feedback: "{{human.feedback}}",
+              },
+            ],
+          },
+          DONE: { kind: "System", command: "true", transitions: [] },
+        },
+        "ANALYZE",
+      ),
+    );
+    activityMocks.executeSystemCommandActivity.mockResolvedValue({
+      status: "success",
+      exit_code: 0,
+      stdout: "",
+      stderr: "",
+    });
+  }
+
+  function humanInputRequested() {
+    return activityMocks.publishEventActivity.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.event_type === "HumanInputRequested");
+  }
+
+  it("emits HumanInputRequested with the prompt rendered against the blackboard and the prior states' outputs", async () => {
+    gateDefinition("{{input.task}}");
+    signals.push(["yes"]);
+
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { task: "name the judge" },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(humanInputRequested()).toHaveLength(1);
+    expect(humanInputRequested()[0].prompt).toBe(
+      "Approve the requirements for name the judge:\nR1. The judge is code-quality-judge.",
+    );
+  });
+
+  it("puts a 'no' with feedback on the blackboard's human.feedback and in the re-entered state's rendered input", async () => {
+    gateDefinition(
+      "{{input.task}}{{#if human.feedback}}\nSent back: {{human.feedback}}{{/if}}",
+    );
+    signals.push(["no", "Name the judge in agents/forge only."], ["yes"]);
+
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { task: "name the judge" },
+    });
+
+    expect(result.status).toBe("completed");
+    const inputs = activityMocks.executeAgentActivity.mock.calls.map(
+      (call) => call[0].input,
+    );
+    expect(inputs).toEqual([
+      "name the judge",
+      "name the judge\nSent back: Name the judge in agents/forge only.",
+    ]);
+    expect(result.blackboard?.human).toEqual({
+      response: "yes",
+      feedback: "",
+    });
+    expect(humanInputRequested()).toHaveLength(2);
+  });
+
+  it("keeps the feedback a 'no' carried on the blackboard until the state re-entered has read it", async () => {
+    gateDefinition("{{input.task}}");
+    signals.push(["no", "Name the judge in agents/forge only."]);
+    // The second visit to APPROVE times out with no default: the run fails
+    // there, holding the blackboard as the re-entered ANALYZE left it.
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { task: "name the judge" },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.blackboard?.APPROVE).toEqual({
+      response: "no",
+      feedback: "Name the judge in agents/forge only.",
+      timeout: false,
+    });
+    expect(result.blackboard?.human).toEqual({
+      response: "no",
+      feedback: "Name the judge in agents/forge only.",
+    });
+  });
+
+  it("answers a signal with no feedback with an empty human.feedback", async () => {
+    gateDefinition("{{input.task}}");
+    signals.push(["no"], ["yes"]);
+
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { task: "name the judge" },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.blackboard?.APPROVE).toEqual({
+      response: "yes",
+      timeout: false,
+    });
+    expect(activityMocks.executeAgentActivity).toHaveBeenCalledTimes(2);
   });
 });

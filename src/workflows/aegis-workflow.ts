@@ -18,6 +18,7 @@ import type {
   BlackboardRepository,
   RepositoryAction,
   RunRepositoryEntry,
+  HumanSignal,
 } from "../types.js";
 import * as activities from "../activities/index.js";
 
@@ -233,16 +234,22 @@ export async function aegis_workflow(
   // to satisfy Temporal's determinism requirements. A single signal registration covers
   // all Human states in the workflow. clearResponse() is called after each Human state
   // consumes the value so successive Human gates wait for distinct signals.
-  const humanInputSignal = defineSignal<[string]>("humanInput");
+  // The signal's first argument is the response; its optional second is the
+  // person's feedback, read by a transition's `feedback:` as `{{human.feedback}}`.
+  const humanInputSignal = defineSignal<[string, string?]>("humanInput");
   let humanResponse: string | null = null;
-  setHandler(humanInputSignal, (response: string) => {
+  let humanFeedback: string | undefined;
+  setHandler(humanInputSignal, (response: string, feedback?: string) => {
     humanResponse = response;
+    humanFeedback = typeof feedback === "string" ? feedback : undefined;
   });
 
-  const humanSignal = {
+  const humanSignal: HumanSignal = {
     getResponse: () => humanResponse,
+    getFeedback: () => humanFeedback,
     clearResponse: () => {
       humanResponse = null;
+      humanFeedback = undefined;
     },
   };
 
@@ -417,6 +424,19 @@ export async function aegis_workflow(
       // with `status` at root and `output` nested, so store directly.
       blackboard[currentState] = stateOutput;
 
+      // A Human state's answer is the blackboard's `human`, so a transition's
+      // `feedback:` and every later state read `{{human.response}}` and
+      // `{{human.feedback}}`.
+      if (state.kind === "Human") {
+        blackboard.human = {
+          response: stateOutput.response,
+          feedback:
+            typeof stateOutput.feedback === "string"
+              ? stateOutput.feedback
+              : "",
+        };
+      }
+
       // Check Terminal
       if (!state.transitions || state.transitions.length === 0) {
         // ADR-087: destroy ephemeral workspace volume on terminal state
@@ -456,12 +476,27 @@ export async function aegis_workflow(
       }
 
       // Transition
-      currentState = await evaluateTransitions(
+      const taken = await evaluateTransitions(
         currentState,
         state.transitions,
         stateOutput,
         blackboard,
       );
+      currentState = taken ? taken.target : null;
+
+      // A taken transition's `feedback:` is rendered and put on the blackboard
+      // as `human.feedback`, which the entered state's input reads as it reads
+      // a prior state's output.
+      if (taken && typeof taken.feedback === "string") {
+        const human =
+          blackboard.human && typeof blackboard.human === "object"
+            ? blackboard.human
+            : {};
+        blackboard.human = {
+          ...human,
+          feedback: renderTemplate(taken.feedback, blackboard),
+        };
+      }
 
       if (currentState === null) {
         // ADR-087: destroy ephemeral workspace volume on terminal state
@@ -569,7 +604,7 @@ async function executeState(
   blackboard: Blackboard,
   emit: (eventType: string, extra?: any) => Promise<void>,
   executionId: string,
-  humanSignal: { getResponse: () => string | null; clearResponse: () => void },
+  humanSignal: HumanSignal,
   stateNames: readonly string[],
   securityContextName?: string,
 ): Promise<any> {
@@ -879,8 +914,10 @@ async function executeState(
       // Clear any previous signal response so this Human state receives a fresh one.
       humanSignal.clearResponse();
 
+      // The person reads the prompt rendered against the blackboard and the
+      // prior states' outputs, as an Agent state's input is rendered.
       await emit("HumanInputRequested", {
-        prompt: state.prompt,
+        prompt: renderTemplate(state.prompt, blackboard),
         default_response: state.default_response,
       });
 
@@ -889,6 +926,7 @@ async function executeState(
       await condition(() => humanSignal.getResponse() !== null, timeout * 1000);
 
       const hr = humanSignal.getResponse();
+      const hf = humanSignal.getFeedback();
       humanSignal.clearResponse();
 
       if (hr === null) {
@@ -896,7 +934,9 @@ async function executeState(
           return { response: state.default_response, timeout: true };
         throw new Error("Human input timeout");
       }
-      return { response: hr, timeout: false };
+      return hf === undefined
+        ? { response: hr, timeout: false }
+        : { response: hr, feedback: hf, timeout: false };
 
     case "ParallelAgents": {
       if (!state.agents || !state.consensus)
@@ -1285,15 +1325,16 @@ async function executeState(
   }
 }
 
+/** The transition taken out of a state, or null when none matches. */
 async function evaluateTransitions(
   stateName: string,
   transitions: TransitionRule[],
   stateOutput: any,
   blackboard: Blackboard,
-): Promise<string | null> {
+): Promise<TransitionRule | null> {
   for (const t of transitions) {
     if (await evaluateCondition(t, stateOutput, blackboard)) {
-      return t.target;
+      return t;
     }
   }
   // A state that routes on its score but carries none has no route: reading

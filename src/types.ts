@@ -426,6 +426,16 @@ export interface HumanInputResult {
 }
 
 /**
+ * The `humanInput` signal as a Human state reads it: the response, and the
+ * person's optional feedback, the signal's second argument.
+ */
+export interface HumanSignal {
+  getResponse: () => string | null;
+  getFeedback: () => string | undefined;
+  clearResponse: () => void;
+}
+
+/**
  * Parallel agents consensus result
  */
 export interface ConsensusResult {
