@@ -786,6 +786,7 @@ describe("AegisRuntimeClient's channel", () => {
         "grpc.keepalive_permit_without_calls": 1,
         "grpc.max_reconnect_backoff_ms": 5_000,
         "grpc.dns_min_time_between_resolutions_ms": 5_000,
+        "grpc.use_local_subchannel_pool": 1,
       },
     );
   });

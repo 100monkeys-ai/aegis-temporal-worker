@@ -516,3 +516,130 @@ describe("the orchestrator's pod replaced under a kept client", () => {
     60_000,
   );
 });
+
+/**
+ * A TCP relay on `host:port` in front of a server. Once it goes dark it
+ * forwards nothing on the sockets it holds, and it keeps accepting new
+ * connections and holding them without a byte in answer: the address of a
+ * replaced pod that still takes a TCP connection but never completes an HTTP/2
+ * handshake, as production saw on 2026-10-11.
+ */
+async function darkeningRelay(host: string, port: number, upstreamPort: number) {
+  let dark = false;
+  const sockets: net.Socket[] = [];
+  const listener = net.createServer((downstream) => {
+    sockets.push(downstream);
+    downstream.on("error", () => {});
+    if (dark) return; // Accepted and held, never answered.
+    const upstream = net.connect(upstreamPort, "127.0.0.1");
+    sockets.push(upstream);
+    upstream.on("error", () => {});
+    downstream.on("data", (d) => !dark && upstream.write(d));
+    upstream.on("data", (d) => !dark && downstream.write(d));
+    upstream.on("close", () => !dark && downstream.destroy());
+    downstream.on("close", () => !dark && upstream.destroy());
+  });
+  const bound = await new Promise<number>((resolve, reject) => {
+    listener.once("error", reject);
+    listener.listen(port, host, () =>
+      resolve((listener.address() as net.AddressInfo).port),
+    );
+  });
+  closers.push(() => {
+    listener.close();
+    sockets.forEach((s) => s.destroy());
+  });
+  return {
+    port: bound,
+    goDark: () => {
+      dark = true;
+    },
+  };
+}
+
+describe("a failed wait for a connection", () => {
+  it("replaces the channel, so the next call goes out on a new one", async () => {
+    const name = "core-d.aegis.test";
+    names.set(name, null); // Resolves nowhere for the whole connect timeout.
+    const connectTimeoutMs = 1_000;
+    const client = newClient(`${name}:50051`, { connectTimeoutMs });
+    const first = (client as any).client;
+    const closeSpy = vi.spyOn(first, "close");
+
+    const failed = await within(
+      client.queryCortexPatterns({ error_signature: "e" }),
+      connectTimeoutMs + 2_000,
+      "queryCortexPatterns with the name unresolvable",
+    );
+    expect(failed.ok).toBe(false);
+    expectRetryableUnavailable((failed as any).error);
+
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect((client as any).client).not.toBe(first);
+  }, 30_000);
+});
+
+describe("the orchestrator's name moved three times, each old address dark", () => {
+  it("reaches each new server within the connect timeout, and the last one too", async () => {
+    const name = "core-e.aegis.test";
+    const settings = {
+      keepaliveTimeMs: 1_000,
+      keepaliveTimeoutMs: 1_000,
+      maxReconnectBackoffMs: 1_000,
+      dnsMinTimeBetweenResolutionsMs: 1_000,
+      connectTimeoutMs: 3_000,
+    };
+    const outageMs = settings.connectTimeoutMs + 1_000;
+    const hosts = ["127.0.0.1", "127.0.0.2", "127.0.0.3", "127.0.0.4"];
+    const labels = ["A", "B", "C", "D"];
+
+    async function generation(i: number, port: number) {
+      const upstream = await startServer("127.0.0.1:0", orchestratorHandlers(labels[i]));
+      return darkeningRelay(hosts[i], port, upstream);
+    }
+
+    let current = await generation(0, 0);
+    const port = current.port;
+    names.set(name, hosts[0]);
+    const client = newClient(`${name}:${port}`, settings);
+    const warm = await within(
+      client.executeAgent(agentRequest("agent-1")),
+      5_000,
+      "warm-up executeAgent",
+    );
+    expect(warm.ok).toBe(true);
+
+    for (let i = 1; i < hosts.length; i++) {
+      current.goDark();
+      names.set(name, null);
+      // A call issued during the outage: it fails as retryable.
+      const during = await within(
+        client.executeAgent(agentRequest("agent-1")),
+        settings.connectTimeoutMs + 2_000,
+        `executeAgent during outage ${i}`,
+      );
+      expect(during.ok).toBe(false);
+      expectRetryableUnavailable((during as any).error);
+      await sleep(Math.max(0, outageMs - during.ms));
+
+      current = await generation(i, port);
+      names.set(name, hosts[i]);
+      await sleep(1_000); // Temporal's first retry interval.
+      const next = await within(
+        client.executeAgent(agentRequest("agent-1")),
+        settings.connectTimeoutMs + 1_000,
+        `executeAgent after replacement ${i}`,
+      );
+      if (!next.ok) {
+        throw new Error(
+          `replacement ${i}: executeAgent did not reach ${hosts[i]}: ${(next as any).error?.message}`,
+        );
+      }
+      expect(next.ms).toBeLessThanOrEqual(settings.connectTimeoutMs);
+      expect((next as any).value.at(-1).final_output).toBe(`served by ${labels[i]}`);
+      console.log(
+        `[measure] replacement ${i}: the outage call failed after ${during.ms} ms; the next executeAgent reached ${hosts[i]} in ${next.ms} ms`,
+      );
+    }
+  }, 60_000);
+});

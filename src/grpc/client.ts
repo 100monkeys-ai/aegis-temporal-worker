@@ -260,6 +260,7 @@ function runtimeChannelOptions(
     "grpc.max_reconnect_backoff_ms": settings.maxReconnectBackoffMs,
     "grpc.dns_min_time_between_resolutions_ms":
       settings.dnsMinTimeBetweenResolutionsMs,
+    "grpc.use_local_subchannel_pool": 1,
   };
 }
 
@@ -267,18 +268,25 @@ function runtimeChannelOptions(
 class AegisRuntimeClient {
   private client: any;
   private readonly serverAddress: string;
+  private readonly settings: RuntimeChannelSettings;
   private readonly connectTimeoutMs: number;
 
   constructor(serverAddress: string, settings: RuntimeChannelSettings) {
     this.serverAddress = serverAddress;
+    this.settings = settings;
     this.connectTimeoutMs = settings.connectTimeoutMs;
-    // Package name is aegis.runtime.v1
-    this.client = new aegisProto.aegis.runtime.v1.AegisRuntime(
-      serverAddress,
-      grpc.credentials.createInsecure(),
-      runtimeChannelOptions(settings),
-    );
+    this.client = this.newChannel();
     logger.info({ server_address: serverAddress }, "gRPC client initialized");
+  }
+
+  /** A new channel to the orchestrator, which resolves serverAddress afresh. */
+  private newChannel(): any {
+    // Package name is aegis.runtime.v1
+    return new aegisProto.aegis.runtime.v1.AegisRuntime(
+      this.serverAddress,
+      grpc.credentials.createInsecure(),
+      runtimeChannelOptions(this.settings),
+    );
   }
 
   /**
@@ -287,10 +295,20 @@ class AegisRuntimeClient {
    * while the orchestrator is restarting fails at once; with it the call goes
    * out as soon as the new orchestrator answers, or fails as UNAVAILABLE, an
    * error Temporal retries.
+   *
+   * A channel that found no connection in connectTimeoutMs is closed and
+   * replaced before the call fails, so the retry goes out on a new channel
+   * that resolves the name again. A kept channel can stay stuck on a vanished
+   * address: on 2026-10-11 the worker's channel failed every call for hours
+   * through five orchestrator replacements while the name resolved to the new
+   * address, and a fresh process connected on its first call. The channel
+   * options give each channel its own subchannel pool, so a new channel does
+   * not take over a stuck subchannel from grpc-js's process-wide pool.
    */
   private waitForChannel(method: string): Promise<void> {
+    const channel = this.client;
     return new Promise((resolve, reject) => {
-      this.client.waitForReady(
+      channel.waitForReady(
         Date.now() + this.connectTimeoutMs,
         (error?: Error) => {
           if (!error) {
@@ -299,6 +317,15 @@ class AegisRuntimeClient {
           }
           const details = `${method}: no connection to the orchestrator at ${this.serverAddress} within ${this.connectTimeoutMs} ms (${error.message})`;
           logger.error({ method }, details);
+          // Calls waiting at once on one stuck channel replace it once.
+          if (this.client === channel) {
+            channel.close();
+            this.client = this.newChannel();
+            logger.warn(
+              { method, server_address: this.serverAddress },
+              "gRPC channel replaced: the next call opens a new connection and resolves the orchestrator's name again",
+            );
+          }
           reject(
             Object.assign(new Error(`14 UNAVAILABLE: ${details}`), {
               code: grpc.status.UNAVAILABLE,
