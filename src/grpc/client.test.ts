@@ -1174,3 +1174,95 @@ describe("AegisRuntimeClient.runRepositoryAction", () => {
     ).rejects.toThrow("NOT_FOUND: workflow execution");
   });
 });
+
+describe("AegisRuntimeClient.runImageGenerate", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mocks.runtimeCtorMock.mockReset();
+    mocks.metadataAddMock.mockReset();
+    for (const fn of Object.values(mocks.logger)) {
+      fn.mockReset();
+    }
+  });
+
+  function runtimeWith(rpc: ReturnType<typeof vi.fn>) {
+    mocks.runtimeCtorMock.mockImplementation(function () {
+      return {
+        RunImageGenerate: rpc,
+        close: mocks.closeMock,
+        waitForReady: readyChannel,
+      };
+    });
+  }
+
+  const file = {
+    volume_id: "vol-run-1",
+    path: "generated/1.png",
+    content_type: "image/png",
+    size_bytes: 897323,
+  };
+
+  it("calls RunImageGenerate with the request, the token and the run's tenant", async () => {
+    const rpc = vi.fn((_req: any, _meta: any, cb: any) => {
+      cb(null, { files: [file] });
+    });
+    runtimeWith(rpc);
+
+    const { aegisRuntimeClient } = await import("./client.js");
+    const answer = await aegisRuntimeClient.runImageGenerate(
+      {
+        workflow_execution_id: "exec-1",
+        prompt: "a monkey reading",
+        count: 2,
+      },
+      "tenant-a",
+    );
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc.mock.calls[0][0]).toEqual({
+      workflow_execution_id: "exec-1",
+      prompt: "a monkey reading",
+      count: 2,
+    });
+    expect(rpc.mock.calls[0][1].entries).toEqual([
+      ["authorization", "Bearer test-token"],
+      ["x-tenant-id", "tenant-a"],
+    ]);
+    expect(answer).toEqual({ files: [file] });
+  });
+
+  it("sends no tenant header when the run names no tenant", async () => {
+    const rpc = vi.fn((_req: any, _meta: any, cb: any) => {
+      cb(null, {
+        files: [],
+        sentence: "this node has no image generation model",
+      });
+    });
+    runtimeWith(rpc);
+
+    const { aegisRuntimeClient } = await import("./client.js");
+    await aegisRuntimeClient.runImageGenerate({
+      workflow_execution_id: "exec-1",
+      prompt: "a monkey",
+    });
+
+    expect(rpc.mock.calls[0][1].entries).toEqual([
+      ["authorization", "Bearer test-token"],
+    ]);
+  });
+
+  it("rejects with the transport's error", async () => {
+    const rpc = vi.fn((_req: any, _meta: any, cb: any) => {
+      cb(new Error("NOT_FOUND: workflow execution"), undefined);
+    });
+    runtimeWith(rpc);
+
+    const { aegisRuntimeClient } = await import("./client.js");
+    await expect(
+      aegisRuntimeClient.runImageGenerate({
+        workflow_execution_id: "exec-1",
+        prompt: "a monkey",
+      }),
+    ).rejects.toThrow("NOT_FOUND: workflow execution");
+  });
+});

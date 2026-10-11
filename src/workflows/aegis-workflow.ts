@@ -70,6 +70,7 @@ const {
   executeParallelContainerRunActivity,
   executeOutputHandlerActivity,
   runRepositoryActionActivity,
+  runImageGenerateActivity,
 } = agentActivities;
 
 const workspaceActivities = proxyActivities<{
@@ -135,12 +136,21 @@ const RESERVED_BLACKBOARD_KEYS: ReadonlySet<string> = new Set([
 /**
  * The repository actions: each maps an `Action` state's action name to the
  * RepositoryAction the orchestrator runs on the repository the run holds.
+ * Their image sibling is `image_generate` (IMAGE_ACTION), which the
+ * orchestrator runs through RunImageGenerate into the run's volume.
  */
 const REPOSITORY_ACTIONS: Readonly<Record<string, RepositoryAction>> = {
   repository_diff: "diff",
   repository_commit: "commit",
   repository_land: "land",
 };
+
+/**
+ * The image action: an `Action` state that generates images with the node's
+ * image generation model, run by the orchestrator's RunImageGenerate, as the
+ * repository actions are run by RunRepositoryAction.
+ */
+const IMAGE_ACTION = "image_generate";
 
 /**
  * The workflow's own operations, in the order a refusal names them: an
@@ -152,6 +162,7 @@ const ACTIONS = [
   "repository_diff",
   "repository_commit",
   "repository_land",
+  IMAGE_ACTION,
 ] as const;
 
 /**
@@ -202,6 +213,51 @@ async function runRepositoryStep(
     ref: answer.ref,
     diff: answer.diff,
   };
+  if (answer.sentence) {
+    return {
+      status: "failed",
+      exit_code: 1,
+      error: answer.sentence,
+      output: { ...output, sentence: answer.sentence },
+    };
+  }
+  return { status: "success", exit_code: 0, output };
+}
+
+/**
+ * Runs the image action on the run's volume, through the orchestrator's
+ * RunImageGenerate, the image sibling of runRepositoryStep. The rendered
+ * `prompt` is required; `alias`, `size`, `count` and `path` are sent when the
+ * state sets them and they render non-empty. The answer's files are the
+ * state's output; an answer's sentence fails the state with that sentence, so
+ * its on_failure transition takes it.
+ */
+async function runImageGenerateStep(
+  args: Record<string, string>,
+  executionId: string,
+  blackboard: Blackboard,
+): Promise<any> {
+  const prompt = args.prompt;
+  if (prompt === undefined || prompt.trim() === "") {
+    throw new Error("'prompt' is required: what the image shows");
+  }
+  const params: {
+    workflow_execution_id: string;
+    prompt: string;
+    alias?: string;
+    size?: string;
+    count?: string;
+    path?: string;
+    tenant_id?: string;
+  } = { workflow_execution_id: executionId, prompt };
+  for (const key of ["alias", "size", "count", "path"] as const) {
+    if (args[key] !== undefined && args[key] !== "") params[key] = args[key];
+  }
+  const tenantId = (blackboard.tenant_id as string | undefined) || undefined;
+  if (tenantId) params.tenant_id = tenantId;
+
+  const answer = await runImageGenerateActivity(params);
+  const output = { files: answer.files };
   if (answer.sentence) {
     return {
       status: "failed",
@@ -959,6 +1015,9 @@ async function executeState(
       }
       if (state.action === "update_blackboard") {
         return writeBlackboard(args, blackboard, stateNames);
+      }
+      if (state.action === IMAGE_ACTION) {
+        return await runImageGenerateStep(args, executionId, blackboard);
       }
       return await runRepositoryStep(
         REPOSITORY_ACTIONS[state.action],

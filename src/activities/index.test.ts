@@ -5,11 +5,13 @@ const {
   executeContainerRunMock,
   executeAgentMock,
   runRepositoryActionMock,
+  runImageGenerateMock,
   cancelMock,
   activityContext,
 } = vi.hoisted(() => ({
   executeContainerRunMock: vi.fn(),
   runRepositoryActionMock: vi.fn(),
+  runImageGenerateMock: vi.fn(),
   executeAgentMock: vi.fn(),
   cancelMock: vi.fn(),
   /** The Temporal activity context the code under test sees; none outside an activity. */
@@ -41,6 +43,7 @@ vi.mock("../grpc/client.js", () => ({
     executeContainerRun: executeContainerRunMock,
     executeAgent: executeAgentMock,
     runRepositoryAction: runRepositoryActionMock,
+    runImageGenerate: runImageGenerateMock,
     executeSystemCommand: vi.fn(),
     validateWithJudges: vi.fn(),
     storeTrajectoryPattern: vi.fn(),
@@ -845,6 +848,113 @@ describe("runRepositoryActionActivity", () => {
       activitiesModule.runRepositoryActionActivity({
         workflow_execution_id: "exec-1",
         action: "diff",
+      }),
+    ).rejects.toThrow("UNAVAILABLE");
+  });
+});
+
+// The image generation step (RunImageGenerate): the activity names the run and
+// the rendered arguments, `count` as an integer, and answers the orchestrator's
+// files as it gave them.
+describe("runImageGenerateActivity", () => {
+  beforeEach(() => {
+    runImageGenerateMock.mockReset();
+  });
+
+  const file = {
+    volume_id: "vol-run-1",
+    path: "generated/1.png",
+    content_type: "image/png",
+    size_bytes: 897323,
+  };
+
+  it("sends the run, the prompt and every argument the state set, count as an integer, in the run's tenant", async () => {
+    runImageGenerateMock.mockResolvedValue({ files: [file] });
+
+    const answer = await activitiesModule.runImageGenerateActivity({
+      workflow_execution_id: "exec-1",
+      prompt: "a monkey reading",
+      alias: "image",
+      size: "1024x1024",
+      count: "2",
+      path: "covers/",
+      tenant_id: "tenant-a",
+    });
+
+    expect(runImageGenerateMock).toHaveBeenCalledTimes(1);
+    expect(runImageGenerateMock.mock.calls[0][0]).toEqual({
+      workflow_execution_id: "exec-1",
+      prompt: "a monkey reading",
+      alias: "image",
+      size: "1024x1024",
+      count: 2,
+      path: "covers/",
+    });
+    expect(runImageGenerateMock.mock.calls[0][1]).toBe("tenant-a");
+    expect(answer).toEqual({ files: [file], sentence: undefined });
+  });
+
+  it("sends no optional argument the state did not set, and none as an empty string", async () => {
+    runImageGenerateMock.mockResolvedValue({ files: [file] });
+
+    await activitiesModule.runImageGenerateActivity({
+      workflow_execution_id: "exec-1",
+      prompt: "a monkey",
+      alias: "",
+      path: "",
+    });
+
+    expect(runImageGenerateMock.mock.calls[0][0]).toEqual({
+      workflow_execution_id: "exec-1",
+      prompt: "a monkey",
+    });
+    expect(runImageGenerateMock.mock.calls[0][1]).toBeUndefined();
+  });
+
+  it.each(["0", "5", "2.5", "two", "-1", "1e1", " "])(
+    "answers count '%s' as a failed state with the sentence, before any call",
+    async (count) => {
+      const answer = await activitiesModule.runImageGenerateActivity({
+        workflow_execution_id: "exec-1",
+        prompt: "a monkey",
+        count,
+      });
+
+      expect(runImageGenerateMock).not.toHaveBeenCalled();
+      expect(answer).toEqual({ files: [], sentence: "'count' is 1 to 4" });
+    },
+  );
+
+  it("answers the refusal's sentence with no files, and an unset sentence absent", async () => {
+    runImageGenerateMock.mockResolvedValue({
+      files: [],
+      sentence: "this node has no image generation model",
+    });
+
+    const refused = await activitiesModule.runImageGenerateActivity({
+      workflow_execution_id: "exec-1",
+      prompt: "a monkey",
+    });
+    expect(refused).toEqual({
+      files: [],
+      sentence: "this node has no image generation model",
+    });
+
+    runImageGenerateMock.mockResolvedValue({ files: [file], sentence: "" });
+    const drawn = await activitiesModule.runImageGenerateActivity({
+      workflow_execution_id: "exec-1",
+      prompt: "a monkey",
+    });
+    expect(drawn).toEqual({ files: [file], sentence: undefined });
+  });
+
+  it("throws the transport's error", async () => {
+    runImageGenerateMock.mockRejectedValue(new Error("UNAVAILABLE"));
+
+    await expect(
+      activitiesModule.runImageGenerateActivity({
+        workflow_execution_id: "exec-1",
+        prompt: "a monkey",
       }),
     ).rejects.toThrow("UNAVAILABLE");
   });

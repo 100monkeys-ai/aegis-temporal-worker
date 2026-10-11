@@ -92,6 +92,72 @@ describe("aegis.runtime.v1 wire contract", () => {
     expect(decoded.workflow_execution_id).toBeUndefined();
   });
 
+  it("round-trips a RunImageGenerateRequest with every optional argument, count an integer", () => {
+    const method = runtimeService.RunImageGenerate;
+    const request = {
+      workflow_execution_id: "exec-1",
+      prompt: "a grey monkey reading under a tree — 日本語",
+      alias: "image",
+      size: "1024x1024",
+      count: 2,
+      path: "generated/",
+    };
+
+    const decoded = method.requestDeserialize(
+      method.requestSerialize(request),
+    ) as Record<string, unknown>;
+
+    expect(decoded).toMatchObject(request);
+    expect(typeof decoded.count).toBe("number");
+  });
+
+  it("round-trips a RunImageGenerateRequest with no optional argument, each absent", () => {
+    const method = runtimeService.RunImageGenerate;
+    const decoded = method.requestDeserialize(
+      method.requestSerialize({
+        workflow_execution_id: "exec-1",
+        prompt: "a monkey",
+      }),
+    ) as Record<string, unknown>;
+
+    expect(decoded.workflow_execution_id).toBe("exec-1");
+    expect(decoded.prompt).toBe("a monkey");
+    expect(decoded.alias).toBeUndefined();
+    expect(decoded.size).toBeUndefined();
+    expect(decoded.count).toBeUndefined();
+    expect(decoded.path).toBeUndefined();
+  });
+
+  it("round-trips a RunImageGenerateResponse with one GeneratedFile and no sentence", () => {
+    const method = runtimeService.RunImageGenerate;
+    const file = {
+      volume_id: "9f0b2e1f-02cb-4e5b-9e45-51b16e5beaf6",
+      path: "generated/1.png",
+      content_type: "image/png",
+      size_bytes: 2 ** 40 + 7,
+    };
+
+    const decoded = method.responseDeserialize(
+      method.responseSerialize({ files: [file] }),
+    ) as Record<string, any>;
+
+    expect(decoded.files).toEqual([file]);
+    expect(typeof decoded.files[0].size_bytes).toBe("number");
+    expect(decoded.sentence).toBeUndefined();
+  });
+
+  it("reads a RunImageGenerateResponse refusal with its sentence and no files", () => {
+    const method = runtimeService.RunImageGenerate;
+    const decoded = method.responseDeserialize(
+      method.responseSerialize({
+        sentence: "this node has no image generation model",
+      }),
+    ) as Record<string, any>;
+
+    expect(decoded.files).toEqual([]);
+    expect(decoded.sentence).toBe("this node has no image generation model");
+  });
+
   describe("over a real @grpc/grpc-js channel", () => {
     let server: grpc.Server | undefined;
     let client: grpc.Client | undefined;

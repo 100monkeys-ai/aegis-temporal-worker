@@ -598,6 +598,52 @@ export interface RunRepositoryActionResponse {
 }
 
 /**
+ * gRPC request for RunImageGenerate, the workflow interpreter's own image
+ * generation step. Maps directly to proto RunImageGenerateRequest; an optional
+ * field the state did not set is absent, never "".
+ */
+export interface RunImageGenerateRequest {
+  /** The workflow execution whose volume the images are written into. */
+  workflow_execution_id: string;
+  /** What the image shows, as the state's rendered `prompt`. */
+  prompt: string;
+  /** The node's image generation alias; absent, the node's first one. */
+  alias?: string;
+  /** The image size, as `<width>x<height>`. */
+  size?: string;
+  /** How many images to generate, 1 to 4. */
+  count?: number;
+  /** The directory inside the run's volume; absent, `generated/`. */
+  path?: string;
+}
+
+/**
+ * One image the step wrote, named by its volume and its path inside it. Maps
+ * directly to proto GeneratedFile; no URL.
+ */
+export interface GeneratedFile {
+  /** The volume the image was written into: the workflow execution's. */
+  volume_id: string;
+  /** The image's path inside that volume. */
+  path: string;
+  /** The image's MIME type, for example `image/png`. */
+  content_type: string;
+  /** The image's size in bytes. */
+  size_bytes: number;
+}
+
+/**
+ * gRPC response from RunImageGenerate. Maps directly to proto
+ * RunImageGenerateResponse; `sentence` is absent when the step acted.
+ */
+export interface RunImageGenerateResponse {
+  /** Each image written, in the order generated. */
+  files: GeneratedFile[];
+  /** The refusal, in the orchestrator's words, when nothing was generated. */
+  sentence?: string;
+}
+
+/**
  * One repository a workflow run holds, as the orchestrator prepared it. The
  * worker reads only the fields the blackboard's `repository` carries.
  */

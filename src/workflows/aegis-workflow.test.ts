@@ -15,6 +15,7 @@ const { activityMocks, terminalActivityMocks, executeAgentRpcMock } =
       executeParallelContainerRunActivity: vi.fn(),
       executeOutputHandlerActivity: vi.fn(),
       runRepositoryActionActivity: vi.fn(),
+      runImageGenerateActivity: vi.fn(),
       createEphemeralWorkspaceActivity: vi.fn(),
       destroyWorkspaceVolumeActivity: vi.fn(),
     },
@@ -3265,12 +3266,188 @@ describe("an Action state runs the workflow's own operation", () => {
     expect(result.status).toBe("failed");
     expect(result.final_state).toBe("STEP");
     expect(result.error).toBe(
-      "unknown action 'repository_push'; the actions are update_blackboard, repository_diff, repository_commit, repository_land",
+      "unknown action 'repository_push'; the actions are update_blackboard, repository_diff, repository_commit, repository_land, image_generate",
     );
     expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
     expect(activityMocks.runRepositoryActionActivity).not.toHaveBeenCalled();
+    expect(activityMocks.runImageGenerateActivity).not.toHaveBeenCalled();
     expect(result.blackboard?.STEP).toBeUndefined();
   });
+
+  // `image_generate` runs through the orchestrator's RunImageGenerate: the
+  // rendered args go to the run's volume, and the answer's files are the
+  // state's output.
+  const generatedFile = {
+    volume_id: "vol-run-1",
+    path: "generated/1.png",
+    content_type: "image/png",
+    size_bytes: 897323,
+  };
+
+  it("'image_generate' sends the rendered prompt, alias, size, count and path for the run, and records the answer's files", async () => {
+    activityMocks.runImageGenerateActivity.mockResolvedValue({
+      files: [generatedFile],
+    });
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          DRAW: {
+            kind: "Action",
+            action: "image_generate",
+            args: {
+              prompt: "a monkey reading {{input.book}}",
+              alias: "{{input.alias}}",
+              size: "1024x1024",
+              count: "{{input.count}}",
+              path: "covers/{{input.book}}/",
+            },
+            transitions: [{ condition: "on_success", target: "COMPLETE" }],
+          },
+          COMPLETE: {
+            kind: "Action",
+            action: "update_blackboard",
+            args: { first: "{{DRAW.output.files.[0].path}}" },
+            transitions: [],
+          },
+        },
+        "DRAW",
+      ),
+    );
+
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { book: "walden", alias: "image", count: "2" },
+      tenant_id: "tenant-a",
+    });
+
+    expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
+    expect(activityMocks.runRepositoryActionActivity).not.toHaveBeenCalled();
+    expect(activityMocks.runImageGenerateActivity).toHaveBeenCalledTimes(1);
+    expect(activityMocks.runImageGenerateActivity.mock.calls[0][0]).toEqual({
+      workflow_execution_id: "exec-123",
+      prompt: "a monkey reading walden",
+      alias: "image",
+      size: "1024x1024",
+      count: "2",
+      path: "covers/walden/",
+      tenant_id: "tenant-a",
+    });
+    expect(result.status).toBe("completed");
+    expect(result.blackboard?.DRAW).toEqual({
+      status: "success",
+      exit_code: 0,
+      output: { files: [generatedFile] },
+    });
+    expect(result.blackboard?.first).toBe("generated/1.png");
+  });
+
+  it("'image_generate' sends only the arguments the state names, and none rendered empty", async () => {
+    activityMocks.runImageGenerateActivity.mockResolvedValue({
+      files: [generatedFile],
+    });
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          DRAW: {
+            kind: "Action",
+            action: "image_generate",
+            args: { prompt: "a monkey", size: "{{input.size}}" },
+            transitions: [],
+          },
+        },
+        "DRAW",
+      ),
+    );
+
+    await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    // The definition's tenant is the run's when the input names none.
+    expect(activityMocks.runImageGenerateActivity.mock.calls[0][0]).toEqual({
+      workflow_execution_id: "exec-123",
+      prompt: "a monkey",
+      tenant_id: "local",
+    });
+  });
+
+  it("an image answer's sentence fails the state with that sentence, and on_failure takes it", async () => {
+    const sentence = "this node has no image generation model";
+    activityMocks.runImageGenerateActivity.mockResolvedValue({
+      files: [],
+      sentence,
+    });
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          DRAW: {
+            kind: "Action",
+            action: "image_generate",
+            args: { prompt: "a monkey" },
+            transitions: [
+              { condition: "on_success", target: "COMPLETE" },
+              { condition: "on_failure", target: "REFUSED" },
+            ],
+          },
+          COMPLETE: {
+            kind: "Action",
+            action: "update_blackboard",
+            args: { outcome: "drawn" },
+            transitions: [],
+          },
+          REFUSED: {
+            kind: "Action",
+            action: "update_blackboard",
+            args: { outcome: "{{{DRAW.output.sentence}}}" },
+            transitions: [],
+          },
+        },
+        "DRAW",
+      ),
+    );
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.final_state).toBe("REFUSED");
+    expect(result.blackboard?.DRAW).toEqual({
+      status: "failed",
+      exit_code: 1,
+      error: sentence,
+      output: { files: [], sentence },
+    });
+    expect(result.blackboard?.outcome).toBe(sentence);
+  });
+
+  it.each([
+    ["no prompt", undefined],
+    ["an empty prompt", { prompt: "" }],
+    ["a prompt that renders empty", { prompt: "{{input.nothing}}" }],
+    ["a prompt of spaces", { prompt: "   " }],
+  ])(
+    "'image_generate' with %s fails the state before any call",
+    async (_form, args) => {
+      activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+        baseDefinition(
+          {
+            DRAW: {
+              kind: "Action",
+              action: "image_generate",
+              ...(args === undefined ? {} : { args }),
+              transitions: [],
+            },
+          },
+          "DRAW",
+        ),
+      );
+
+      const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+      expect(result.status).toBe("failed");
+      expect(result.final_state).toBe("DRAW");
+      expect(result.error).toBe("'prompt' is required: what the image shows");
+      expect(activityMocks.runImageGenerateActivity).not.toHaveBeenCalled();
+      expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
+      expect(result.blackboard?.DRAW).toBeUndefined();
+    },
+  );
 });
 
 // A System state runs a shell command only. One whose rendered command is an
@@ -3305,6 +3482,7 @@ describe("a System state written as an action is refused", () => {
     "repository_diff",
     "repository_commit",
     "repository_land",
+    "image_generate",
   ];
 
   const forms: Array<

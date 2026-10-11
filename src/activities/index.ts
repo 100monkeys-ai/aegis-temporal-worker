@@ -20,6 +20,8 @@ import type {
   RepositoryAction,
   RunRepositoryActionRequest,
   RunRepositoryActionResponse,
+  RunImageGenerateRequest,
+  RunImageGenerateResponse,
 } from "../types.js";
 import { fetchWorkflowDefinition } from "./workflow-activities.js";
 
@@ -493,6 +495,61 @@ export async function runRepositoryActionActivity(params: {
     branch: response.branch ?? "",
     ref: response.ref ?? "",
     diff: response.diff || undefined,
+    sentence: response.sentence || undefined,
+  };
+}
+
+/**
+ * Run the workflow interpreter's image generation step (RunImageGenerate): the
+ * orchestrator writes the images into the workflow run's volume and answers
+ * each file. `count` arrives rendered as a string and is sent as an integer; a
+ * count that is not an integer from 1 to 4 is answered as a refusal before any
+ * call. A refusal is answered, not thrown: its `sentence` is the
+ * orchestrator's, and the workflow fails the state with it.
+ */
+export async function runImageGenerateActivity(params: {
+  workflow_execution_id: string;
+  prompt: string;
+  alias?: string;
+  size?: string;
+  count?: string;
+  path?: string;
+  tenant_id?: string;
+}): Promise<RunImageGenerateResponse> {
+  logger.info(
+    { workflow_execution_id: params.workflow_execution_id },
+    "Executing image generation activity",
+  );
+
+  const request: RunImageGenerateRequest = {
+    workflow_execution_id: params.workflow_execution_id,
+    prompt: params.prompt,
+  };
+  // An optional argument the state did not set is absent, never "".
+  if (params.alias) request.alias = params.alias;
+  if (params.size) request.size = params.size;
+  if (params.count !== undefined && params.count !== "") {
+    const count = /^[0-9]+$/.test(params.count) ? Number(params.count) : NaN;
+    if (!Number.isInteger(count) || count < 1 || count > 4) {
+      return { files: [], sentence: "'count' is 1 to 4" };
+    }
+    request.count = count;
+  }
+  if (params.path) request.path = params.path;
+
+  const response = await aegisRuntimeClient.runImageGenerate(
+    request,
+    params.tenant_id || undefined,
+  );
+
+  // An optional field the orchestrator did not set is absent, never "".
+  return {
+    files: (response.files ?? []).map((file) => ({
+      volume_id: file.volume_id,
+      path: file.path,
+      content_type: file.content_type,
+      size_bytes: file.size_bytes,
+    })),
     sentence: response.sentence || undefined,
   };
 }

@@ -28,6 +28,8 @@ import type {
   InvokeOutputHandlerResponse,
   RunRepositoryActionRequest,
   RunRepositoryActionResponse,
+  RunImageGenerateRequest,
+  RunImageGenerateResponse,
 } from "../types.js";
 
 // Load protobuf definition
@@ -1077,6 +1079,53 @@ class AegisRuntimeClient {
                 refused: Boolean(response.sentence),
               },
               "Repository action answered",
+            );
+            resolve(response);
+          }
+        },
+      );
+    });
+  }
+
+  /**
+   * Run the workflow interpreter's image generation step: the orchestrator
+   * generates the images with the node's image generation model and writes
+   * them into the workflow execution's volume. The worker's service account
+   * acts in the run's tenant, named by `x-tenant-id`.
+   */
+  async runImageGenerate(
+    request: RunImageGenerateRequest,
+    tenantId?: string,
+  ): Promise<RunImageGenerateResponse> {
+    const token = await getServiceToken();
+    const meta = new grpc.Metadata();
+    meta.add("authorization", `Bearer ${token}`);
+    if (tenantId) {
+      meta.add("x-tenant-id", tenantId);
+    }
+    await this.waitForChannel("RunImageGenerate");
+    return new Promise((resolve, reject) => {
+      this.client.RunImageGenerate(
+        request,
+        meta,
+        (error: Error | null, response: RunImageGenerateResponse) => {
+          if (error) {
+            logger.error(
+              {
+                error,
+                workflow_execution_id: request.workflow_execution_id,
+              },
+              "Image generation failed",
+            );
+            reject(error);
+          } else {
+            logger.info(
+              {
+                workflow_execution_id: request.workflow_execution_id,
+                files: response.files?.length ?? 0,
+                refused: Boolean(response.sentence),
+              },
+              "Image generation answered",
             );
             resolve(response);
           }
