@@ -144,6 +144,77 @@ const REPOSITORY_COMMANDS: Readonly<Record<string, RepositoryAction>> = {
 };
 
 /**
+ * The workflow's own operations, in the order a refusal names them: an
+ * `Action` state names one of these, and the state machine runs it itself,
+ * with no model in the loop and never through a shell.
+ */
+const ACTIONS = [
+  "update_blackboard",
+  "repository_diff",
+  "repository_commit",
+  "repository_land",
+] as const;
+
+/**
+ * Writes an `update_blackboard` state's rendered values onto the blackboard's
+ * top level, so a later state reads each as `{{blackboard.<key>}}`. A reserved
+ * key or a state's name fails the state before any key is written.
+ */
+function writeBlackboard(
+  values: Record<string, string>,
+  blackboard: Blackboard,
+  stateNames: readonly string[],
+): { status: "success"; exit_code: 0; updated: string[] } {
+  const keys = Object.keys(values);
+  for (const key of keys) {
+    if (RESERVED_BLACKBOARD_KEYS.has(key) || stateNames.includes(key)) {
+      throw new Error(
+        `update_blackboard cannot write the reserved key '${key}'.`,
+      );
+    }
+  }
+  for (const key of keys) {
+    blackboard[key] = values[key];
+  }
+  return { status: "success", exit_code: 0, updated: keys };
+}
+
+/**
+ * Runs a repository action on the repository the run holds, through the
+ * orchestrator's RunRepositoryAction. The answer's fields are the state's
+ * output; an answer's sentence fails the state with that sentence, so its
+ * on_failure transition takes it.
+ */
+async function runRepositoryStep(
+  action: RepositoryAction,
+  message: string | undefined,
+  executionId: string,
+  blackboard: Blackboard,
+): Promise<any> {
+  const answer = await runRepositoryActionActivity({
+    workflow_execution_id: executionId,
+    action,
+    message: action === "commit" ? message : undefined,
+    tenant_id: (blackboard.tenant_id as string | undefined) || undefined,
+  });
+  const output = {
+    commit_sha: answer.commit_sha,
+    branch: answer.branch,
+    ref: answer.ref,
+    diff: answer.diff,
+  };
+  if (answer.sentence) {
+    return {
+      status: "failed",
+      exit_code: 1,
+      error: answer.sentence,
+      output: { ...output, sentence: answer.sentence },
+    };
+  }
+  return { status: "success", exit_code: 0, output };
+}
+
+/**
  * Whether a ContainerRun volume entry names the run's repository (`repository`
  * or `repository:<label>`). The orchestrator mounts it; the worker passes the
  * name through as written.
@@ -907,6 +978,33 @@ async function executeState(
           : undefined,
         timeout: state.timeout ? parseTimeout(state.timeout) : undefined,
       });
+
+    case "Action": {
+      if (!state.action)
+        throw new Error("Invalid Action State: missing action");
+      // The set is closed: a name outside it fails the state before anything
+      // is rendered or run.
+      if (!(ACTIONS as readonly string[]).includes(state.action)) {
+        throw new Error(
+          `unknown action '${state.action}'; the actions are ${ACTIONS.join(", ")}`,
+        );
+      }
+      // `args` is rendered against the blackboard and the prior states'
+      // outputs, as an Agent state's input is rendered.
+      const args: Record<string, string> = {};
+      for (const [k, v] of Object.entries(state.args ?? {})) {
+        args[k] = renderTemplate(String(v), blackboard);
+      }
+      if (state.action === "update_blackboard") {
+        return writeBlackboard(args, blackboard, stateNames);
+      }
+      return await runRepositoryStep(
+        REPOSITORY_COMMANDS[state.action],
+        args.message,
+        executionId,
+        blackboard,
+      );
+    }
 
     case "Human":
       if (!state.prompt) throw new Error("Invalid Human State");

@@ -229,6 +229,11 @@ export interface WorkflowState {
   env?: Record<string, string>;
   workdir?: string;
 
+  // Action-specific fields: the workflow's own operation, named literally,
+  // and its arguments, each a template rendered when the state runs.
+  action?: string;
+  args?: Record<string, string>;
+
   // Human-specific fields
   prompt?: string;
   default_response?: string;
@@ -282,6 +287,7 @@ export interface WorkflowState {
 export type StateKind =
   | "Agent"
   | "System"
+  | "Action"
   | "Human"
   | "ParallelAgents"
   | "ContainerRun"
