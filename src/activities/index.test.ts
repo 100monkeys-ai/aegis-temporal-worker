@@ -519,6 +519,7 @@ describe("ParallelAgents consensus without judges_for_parallel", () => {
 
 describe("an agent run starts once per step", () => {
   const AGENT = "123e4567-e89b-12d3-a456-426614174000";
+  const fetchMock = vi.fn();
   let controller: AbortController;
   let heartbeat: ReturnType<typeof vi.fn>;
 
@@ -538,6 +539,9 @@ describe("an agent run starts once per step", () => {
     cancelMock.mockReset();
     cancelMock.mockResolvedValue(undefined);
     activityContext.current = undefined;
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.AEGIS_ORCHESTRATOR_URL = "http://orchestrator.test";
   });
 
   type Hooks = {
@@ -546,8 +550,76 @@ describe("an agent run starts once per step", () => {
     signal?: AbortSignal;
   };
 
-  it("starts no second run when an earlier attempt's run outlived it, and is not retried", async () => {
+  /** The orchestrator's answer to the status read of run-1. */
+  function persistedStatus(status: string) {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: "run-1",
+        agent_id: AGENT,
+        status,
+        tenant_id: "tenant-a",
+      }),
+    });
+  }
+
+  it("re-attaches to the run an earlier attempt began and answers its persisted completed result, starting and cancelling nothing", async () => {
     inActivity({ run_begun: true, execution_id: "run-1" });
+    persistedStatus("Completed");
+
+    const result = await executeAgentActivity({
+      agentId: AGENT,
+      input: "task",
+      context: {},
+      tenantId: "tenant-a",
+    });
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(cancelMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://orchestrator.test/v1/executions/run-1",
+      {
+        headers: {
+          Authorization: "Bearer test-token",
+          "X-Tenant-Id": "tenant-a",
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      status: "completed",
+      execution_id: "run-1",
+    });
+    // It keeps the run in its own heartbeat details, so that a later attempt
+    // re-attaches too.
+    expect(heartbeat).toHaveBeenCalledWith({
+      run_begun: true,
+      execution_id: "run-1",
+    });
+  });
+
+  it("answers the persisted failure of the run an earlier attempt began", async () => {
+    inActivity({ run_begun: true, execution_id: "run-1" });
+    persistedStatus("Failed");
+
+    const result = await executeAgentActivity({
+      agentId: AGENT,
+      input: "task",
+      context: {},
+      tenantId: "tenant-a",
+    });
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(cancelMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: "failed",
+      error: "Execution reached persisted failed state",
+      execution_id: "run-1",
+    });
+  });
+
+  it("starts no second run when an earlier attempt's details say a run began with no id, and is not retried", async () => {
+    inActivity({ run_begun: true });
 
     const failure = await executeAgentActivity({
       agentId: AGENT,
@@ -557,31 +629,42 @@ describe("an agent run starts once per step", () => {
     }).catch((error: unknown) => error);
 
     expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(cancelMock).not.toHaveBeenCalled();
     expect(failure).toBeInstanceOf(ApplicationFailure);
     expect((failure as ApplicationFailure).nonRetryable).toBe(true);
-    expect((failure as ApplicationFailure).message).toBe(
-      "An earlier attempt of this step began the agent run run-1; it is not started again.",
-    );
-    expect(cancelMock).toHaveBeenCalledWith("run-1", "tenant-a");
+    expect((failure as ApplicationFailure).type).toBe("AgentRunAlreadyBegun");
   });
 
-  it("keeps its own failure when the orchestrator refuses the cancel", async () => {
-    inActivity({ run_begun: true, execution_id: "run-1" });
-    cancelMock.mockRejectedValue(
-      new Error(
-        "The orchestrator refused to cancel execution run-1 (HTTP 403)",
-      ),
+  it("never writes run_begun into its heartbeat details without the run's id", async () => {
+    inActivity();
+    executeAgentMock.mockImplementation(
+      async (_request: unknown, hooks?: Hooks) => {
+        // ExecutionStarted: the run has begun, its id not yet known.
+        hooks?.onRunBegun?.();
+        hooks?.onRunId?.("run-1");
+        return [
+          {
+            event_type: "ExecutionCompleted",
+            execution_id: "run-1",
+            timestamp: "2026-10-11T00:00:00Z",
+            final_output: "ok",
+            total_iterations: 1,
+          },
+        ];
+      },
     );
 
-    const failure = await executeAgentActivity({
-      agentId: AGENT,
-      input: "task",
-      context: {},
-      tenantId: "tenant-a",
-    }).catch((error: unknown) => error);
+    await executeAgentActivity({ agentId: AGENT, input: "task", context: {} });
 
-    expect(cancelMock).toHaveBeenCalledWith("run-1", "tenant-a");
-    expect((failure as ApplicationFailure).type).toBe("AgentRunAlreadyBegun");
+    for (const [details] of heartbeat.mock.calls) {
+      if ((details as { run_begun?: boolean }).run_begun) {
+        expect(details).toEqual({ run_begun: true, execution_id: "run-1" });
+      }
+    }
+    expect(heartbeat).toHaveBeenCalledWith({
+      run_begun: true,
+      execution_id: "run-1",
+    });
   });
 
   it("retries a transport failure before the run has begun", async () => {

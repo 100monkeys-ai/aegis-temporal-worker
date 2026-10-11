@@ -197,7 +197,14 @@ export async function agentRunLimitSecondsActivity(params: {
 /** How often the agent activity heartbeats while its run's stream lives. */
 export const AGENT_RUN_HEARTBEAT_INTERVAL_MS = 30_000;
 
-/** What an agent activity's heartbeat records about its run. */
+/**
+ * What an agent activity's heartbeat records about its run. `run_begun` is
+ * written only together with `execution_id`: a later attempt that finds the
+ * run's id re-attaches to that run, and a run with no id is nothing it could
+ * re-attach to. Until the run's id is known the activity sends no heartbeat at
+ * all, so that its first heartbeat, which the SDK sends at once while it
+ * throttles the ones after it, carries the id.
+ */
 interface AgentRunHeartbeat {
   run_begun: boolean;
   execution_id?: string;
@@ -214,6 +221,162 @@ function earlierAttemptRun(details: unknown): AgentRunHeartbeat | undefined {
         ? run.execution_id
         : undefined,
   };
+}
+
+/** The status a run's record answers once the run has ended. */
+const RUN_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
+/** The first wait between two status reads of a re-attached run. */
+const RUN_STATUS_FIRST_POLL_MS = 1_000;
+
+/** The longest wait between two status reads of a re-attached run. */
+const RUN_STATUS_MAX_POLL_MS = 30_000;
+
+/**
+ * The persisted status of an agent run (`GET /v1/executions/{id}`), lower
+ * case: the orchestrator's record, the same read the client's status polling
+ * makes (`fetchPersistedExecutionStatus` in `grpc/client.ts`). The worker's
+ * service account names the run's tenant in `X-Tenant-Id`. The record answers
+ * the run's status only, not its output or its error.
+ */
+async function persistedRunStatus(
+  executionId: string,
+  tenantId: string | undefined,
+): Promise<string | null> {
+  const orchestratorUrl =
+    process.env.AEGIS_ORCHESTRATOR_URL || "http://localhost:8088";
+  const token = await getServiceToken();
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  if (tenantId) headers["X-Tenant-Id"] = tenantId;
+  const resp = await fetch(
+    `${orchestratorUrl}/v1/executions/${encodeURIComponent(executionId)}`,
+    { headers },
+  );
+  if (!resp.ok) {
+    throw new Error(
+      `Failed to fetch execution ${executionId} status (HTTP ${resp.status})`,
+    );
+  }
+  const payload = (await resp.json()) as { status?: string; error?: string };
+  if (payload.error) throw new Error(payload.error);
+  return payload.status?.toLowerCase() ?? null;
+}
+
+/** Resolve after `ms`, or at once when `signal` aborts. */
+function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done);
+  });
+}
+
+/**
+ * Re-attach to the run an earlier attempt of this step began: start none,
+ * keep heartbeating the same details, and read the run's persisted status
+ * until it ends or the step's deadline (this attempt's start-to-close) passes.
+ * The answer is the one the earlier attempt would have given from the same
+ * record: `completed`, or `failed` with the record's state. Past the deadline,
+ * or cancelled, it ends as the earlier attempt would have: it asks the
+ * orchestrator to cancel the run.
+ */
+async function reattachToRun(
+  executionId: string,
+  tenantId: string | undefined,
+  activity: Context,
+): Promise<any> {
+  const details: AgentRunHeartbeat = {
+    run_begun: true,
+    execution_id: executionId,
+  };
+  const beat = () => activity.heartbeat({ ...details });
+  beat();
+  const heartbeats = setInterval(beat, AGENT_RUN_HEARTBEAT_INTERVAL_MS);
+  const signal = activity.cancellationSignal;
+  const deadlineMs = Date.now() + activity.info.startToCloseTimeoutMs;
+  logger.warn(
+    { execution_id: executionId, attempt: activity.info.attempt },
+    "Re-attaching to the agent run an earlier attempt of this step began",
+  );
+
+  try {
+    for (let poll = 0; ; poll++) {
+      if (signal.aborted) {
+        await askToCancelRun(
+          executionId,
+          tenantId,
+          "the activity ended before its run",
+        );
+        throw signal.reason;
+      }
+
+      let status: string | null = null;
+      try {
+        status = await persistedRunStatus(executionId, tenantId);
+      } catch (error) {
+        logger.warn(
+          {
+            execution_id: executionId,
+            poll,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "Failed to fetch the re-attached run's persisted status",
+        );
+      }
+
+      if (status === "completed") {
+        // The record carries no output: the answer is the one the earlier
+        // attempt gives when it resolves from the record with no output.
+        const output = normalizeAgentOutput(undefined);
+        const score = agentOutputScore(output);
+        return {
+          status: "completed",
+          output,
+          iterations: 0,
+          execution_id: executionId,
+          ...(score === undefined ? {} : { score }),
+        };
+      }
+      if (status && RUN_TERMINAL_STATUSES.has(status)) {
+        return {
+          status: "failed",
+          error: `Execution reached persisted ${status} state`,
+          iterations: 0,
+          execution_id: executionId,
+        };
+      }
+
+      const untilDeadlineMs = deadlineMs - Date.now();
+      if (untilDeadlineMs <= 0) {
+        await askToCancelRun(
+          executionId,
+          tenantId,
+          "the step's deadline passed with the run not ended",
+        );
+        return {
+          status: "failed",
+          error: `Execution status polling exhausted at the step's deadline ${new Date(deadlineMs).toISOString()} with no terminal state after ${poll + 1} polls`,
+          iterations: 0,
+          execution_id: executionId,
+        };
+      }
+      await waitOrAbort(
+        Math.min(
+          RUN_STATUS_FIRST_POLL_MS * 2 ** poll,
+          RUN_STATUS_MAX_POLL_MS,
+          untilDeadlineMs,
+        ),
+        signal,
+      );
+    }
+  } finally {
+    clearInterval(heartbeats);
+  }
 }
 
 /** The current activity's context, or none when called outside an activity. */
@@ -257,10 +420,12 @@ async function askToCancelRun(
  *
  * An agent run starts once per step: it may send mail or change pages, so a
  * second start is a second act. Once the run's stream has begun, a failure of
- * this activity is not retried, and an attempt that finds an earlier attempt's
- * run in its heartbeat details starts none. When the activity ends before its
- * run (cancelled, timed out), it asks the orchestrator to cancel that run. A
- * transport failure before the run has begun is retried by the retry policy.
+ * this activity is not retried. An attempt that finds an earlier attempt's run
+ * in its heartbeat details starts none: it re-attaches to that run and answers
+ * its persisted result (the earlier attempt's worker may have been replaced
+ * mid-run). When the activity ends before its run (cancelled, timed out), it
+ * asks the orchestrator to cancel that run. A transport failure before the run
+ * has begun is retried by the retry policy.
  */
 export async function executeAgentActivity(params: {
   agentId: string;
@@ -284,16 +449,14 @@ export async function executeAgentActivity(params: {
 
   const activity = currentActivityContext();
   const earlier = earlierAttemptRun(activity?.info.heartbeatDetails);
-  if (earlier) {
+  if (earlier && activity) {
     if (earlier.execution_id) {
-      await askToCancelRun(
-        earlier.execution_id,
-        params.tenantId,
-        "an earlier attempt of this step began it and ended before it",
-      );
+      return reattachToRun(earlier.execution_id, params.tenantId, activity);
     }
+    // A guard: the heartbeat details carry run_begun only with the run's id,
+    // so an earlier attempt's run with no id is not found here.
     throw ApplicationFailure.nonRetryable(
-      `An earlier attempt of this step began the agent run${earlier.execution_id ? ` ${earlier.execution_id}` : ""}; it is not started again.`,
+      "An earlier attempt of this step began the agent run; it is not started again.",
       "AgentRunAlreadyBegun",
     );
   }
@@ -338,22 +501,27 @@ export async function executeAgentActivity(params: {
     request.attachments = params.attachments;
   }
 
+  // Whether the run's stream has begun: a failure from then on is not retried.
+  let runBegun = false;
+  // The heartbeat details: run_begun only together with the run's id.
   const run: AgentRunHeartbeat = { run_begun: false };
   const beat = () => activity?.heartbeat({ ...run });
-  const heartbeats = activity
-    ? setInterval(beat, AGENT_RUN_HEARTBEAT_INTERVAL_MS)
-    : undefined;
+  let heartbeats: ReturnType<typeof setInterval> | undefined;
 
   try {
     // Call Rust ExecutionService via gRPC (streaming)
     const events = await aegisRuntimeClient.executeAgent(request, {
       onRunBegun: () => {
-        run.run_begun = true;
-        beat();
+        runBegun = true;
       },
       onRunId: (executionId) => {
+        runBegun = true;
+        run.run_begun = true;
         run.execution_id = executionId;
         beat();
+        if (activity && !heartbeats) {
+          heartbeats = setInterval(beat, AGENT_RUN_HEARTBEAT_INTERVAL_MS);
+        }
       },
       signal: activity?.cancellationSignal,
       // The status polling's deadline is this activity's own limit plus 60 s.
@@ -396,7 +564,7 @@ export async function executeAgentActivity(params: {
       { error, agent_id: params.agentId, execution_id: run.execution_id },
       "Agent execution activity failed",
     );
-    if (!run.run_begun) {
+    if (!runBegun) {
       throw error;
     }
     if (run.execution_id) {

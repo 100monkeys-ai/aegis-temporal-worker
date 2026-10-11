@@ -520,6 +520,43 @@ describe("aegis_workflow container orchestration behavior", () => {
     );
   });
 
+  it("names an activity failure's cause in WorkflowIterationFailed", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          ANALYZE: {
+            kind: "Agent",
+            agent: "requirements-analyst",
+            input: "analyze",
+            transitions: [],
+          },
+        },
+        "ANALYZE",
+      ),
+    );
+    // The shape Temporal gives the workflow: an ActivityFailure whose cause
+    // is the activity's own ApplicationFailure.
+    const activityFailure = new Error("Activity task failed", {
+      cause: new Error(
+        "An earlier attempt of this step began the agent run; it is not started again.",
+      ),
+    });
+    activityMocks.executeAgentActivity.mockRejectedValue(activityFailure);
+    terminalActivityMocks.executeAgentActivity.mockRejectedValue(
+      activityFailure,
+    );
+
+    await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(activityMocks.publishEventActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: "WorkflowIterationFailed",
+        error:
+          "Activity task failed: An earlier attempt of this step began the agent run; it is not started again.",
+      }),
+    );
+  });
+
   it("stores Agent output under a nested output field and transitions out of PLAN on completion", async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue(
       baseDefinition(

@@ -30,6 +30,27 @@ const agentActivities = proxyActivities<typeof activities>({
   },
 });
 
+/**
+ * An error's message followed by each cause's message, joined by ": ". An
+ * activity's failure reaches the workflow as "Activity task failed" with the
+ * activity's own error as its cause, which is what a reader of the run's
+ * events needs to see.
+ */
+function failureWithCauses(error: unknown): string {
+  const messages: string[] = [];
+  let current: unknown = error;
+  while (current !== undefined && current !== null && messages.length < 10) {
+    if (current instanceof Error) {
+      if (current.message) messages.push(current.message);
+      current = current.cause;
+    } else {
+      messages.push(String(current));
+      break;
+    }
+  }
+  return messages.join(": ");
+}
+
 /** The time the agent activity is given beyond its run's own limit. */
 const AGENT_RUN_LIMIT_MARGIN_SECONDS = 60;
 
@@ -915,10 +936,9 @@ async function executeState(
             `\n\nValidation failed with score ${iterScore}.\nReasoning: ${validationResult.reasoning}\nPlease refine your response.`;
           iteration++;
         } catch (error) {
-          const errMsg = error instanceof Error ? error.message : String(error);
           await emit("WorkflowIterationFailed", {
             iteration_number: iteration,
-            error: errMsg,
+            error: failureWithCauses(error),
           });
           throw error;
         }
