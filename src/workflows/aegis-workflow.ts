@@ -118,10 +118,10 @@ Handlebars.registerHelper("keys", (obj: any) => {
 });
 
 /**
- * The keys a System state's `update_blackboard` never writes (AEGIS ADR-139
- * Updates, W1): each is set by the interpreter when the blackboard is built
- * and read by it or by the templates. A state's name is reserved as well,
- * because the state's result is stored under it.
+ * The keys the `update_blackboard` action never writes: each is set by the
+ * interpreter when the blackboard is built and read by it or by the
+ * templates. A state's name is reserved as well, because the state's result
+ * is stored under it.
  */
 const RESERVED_BLACKBOARD_KEYS: ReadonlySet<string> = new Set([
   "input",
@@ -133,11 +133,10 @@ const RESERVED_BLACKBOARD_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The workflow interpreter's own repository steps: a System state whose
- * rendered command is one of these runs the action on the repository the run
- * holds, through the orchestrator's RunRepositoryAction, and never a shell.
+ * The repository actions: each maps an `Action` state's action name to the
+ * RepositoryAction the orchestrator runs on the repository the run holds.
  */
-const REPOSITORY_COMMANDS: Readonly<Record<string, RepositoryAction>> = {
+const REPOSITORY_ACTIONS: Readonly<Record<string, RepositoryAction>> = {
   repository_diff: "diff",
   repository_commit: "commit",
   repository_land: "land",
@@ -924,51 +923,14 @@ async function executeState(
           `Template resolution failed: "${state.command}" resolved to empty string. Check blackboard keys.`,
         );
       }
-      // `update_blackboard` is the interpreter's own command (AEGIS ADR-139
-      // Updates, W1): the rendered env is written onto the blackboard's top
-      // level, so a later state reads it as `{{blackboard.<key>}}`. No process
-      // runs. A reserved key fails the state before any key is written.
-      if (resolvedCommand.trim() === "update_blackboard") {
-        const keys = Object.keys(env);
-        for (const key of keys) {
-          if (RESERVED_BLACKBOARD_KEYS.has(key) || stateNames.includes(key)) {
-            throw new Error(
-              `update_blackboard cannot write the reserved key '${key}'.`,
-            );
-          }
-        }
-        for (const key of keys) {
-          blackboard[key] = env[key];
-        }
-        return { status: "success", exit_code: 0, updated: keys };
-      }
-      // The repository steps are the interpreter's own commands too: the
-      // orchestrator acts on the repository the run holds. A commit's message
-      // is the state's rendered `env.message`. The answer's sentence fails the
-      // state with that sentence, so its on_failure transition takes it.
-      const repositoryAction = REPOSITORY_COMMANDS[resolvedCommand.trim()];
-      if (repositoryAction !== undefined) {
-        const answer = await runRepositoryActionActivity({
-          workflow_execution_id: executionId,
-          action: repositoryAction,
-          message: repositoryAction === "commit" ? env.message : undefined,
-          tenant_id: (blackboard.tenant_id as string | undefined) || undefined,
-        });
-        const output = {
-          commit_sha: answer.commit_sha,
-          branch: answer.branch,
-          ref: answer.ref,
-          diff: answer.diff,
-        };
-        if (answer.sentence) {
-          return {
-            status: "failed",
-            exit_code: 1,
-            error: answer.sentence,
-            output: { ...output, sentence: answer.sentence },
-          };
-        }
-        return { status: "success", exit_code: 0, output };
+      // A System state runs a shell command only. A rendered command that is
+      // one of the workflow's own actions is refused before any process
+      // starts, so such a string never reaches a shell.
+      if ((ACTIONS as readonly string[]).includes(resolvedCommand.trim())) {
+        const name = resolvedCommand.trim();
+        throw new Error(
+          `a System state runs a shell command; '${name}' is an action: write kind: Action, action: ${name}`,
+        );
       }
       return await executeSystemCommandActivity({
         command: resolvedCommand,
@@ -999,7 +961,7 @@ async function executeState(
         return writeBlackboard(args, blackboard, stateNames);
       }
       return await runRepositoryStep(
-        REPOSITORY_COMMANDS[state.action],
+        REPOSITORY_ACTIONS[state.action],
         args.message,
         executionId,
         blackboard,

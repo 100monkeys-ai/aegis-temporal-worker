@@ -1141,212 +1141,6 @@ describe("Handlebars keys helper", () => {
   });
 });
 
-// AEGIS ADR-139 Updates, W1: `update_blackboard` is the interpreter's own
-// System command. The first scheduled triage run (workflow execution
-// f4611b8e-d5c1-4f0c-a481-c6fb0d59630e) gave every clerk step `mailbox` and
-// `notes_workspace` empty because its SEED state's env went to a shell.
-describe("update_blackboard writes a System state's env onto the blackboard", () => {
-  beforeEach(() => {
-    for (const fn of Object.values(activityMocks)) {
-      fn.mockReset();
-    }
-    activityMocks.publishEventActivity.mockResolvedValue(undefined);
-    activityMocks.executeSystemCommandActivity.mockResolvedValue({
-      status: "success",
-      exit_code: 0,
-      stdout: "",
-      stderr: "",
-    });
-    activityMocks.executeAgentActivity.mockResolvedValue({
-      status: "completed",
-      output: "{}",
-      iterations: 1,
-    });
-  });
-
-  // The shape of `email-inbox-triage`'s SEED and RECONCILE states.
-  function triageDefinition(): TemporalWorkflowDefinition {
-    return {
-      ...baseDefinition(
-        {
-          SEED: {
-            kind: "System",
-            command: "update_blackboard",
-            env: {
-              mailbox: "{{input.mailbox}}",
-              notes_workspace: "{{input.notes_workspace}}",
-              page_prefix:
-                "{{default input.page_prefix workflow.context.page_prefix}}",
-            },
-            transitions: [{ condition: "always", target: "RECONCILE" }],
-          },
-          RECONCILE: {
-            kind: "Agent",
-            agent: "email-loop-clerk",
-            input:
-              'Data: {"mailbox": "{{blackboard.mailbox}}", "notes_workspace": "{{blackboard.notes_workspace}}", "page_prefix": "{{blackboard.page_prefix}}"}',
-            transitions: [],
-          },
-        },
-        "SEED",
-      ),
-      context: { page_prefix: "outreach", draft_only: false },
-    };
-  }
-
-  it("a later state reads the schedule's input from the blackboard, and no command runs", async () => {
-    activityMocks.fetchWorkflowDefinition.mockResolvedValue(triageDefinition());
-
-    const result = await aegis_workflow({
-      workflow_id: "wf-1",
-      input: {
-        mailbox: "jeshua@100monkeys.ai",
-        notes_workspace: "bd23ae6d-2041-4753-820b-313d04f3cc43",
-        page_prefix: "",
-        draft_only: false,
-      },
-    });
-
-    expect(activityMocks.executeAgentActivity).toHaveBeenCalledTimes(1);
-    expect(activityMocks.executeAgentActivity.mock.calls[0][0].input).toBe(
-      'Data: {"mailbox": "jeshua@100monkeys.ai", "notes_workspace": "bd23ae6d-2041-4753-820b-313d04f3cc43", "page_prefix": "outreach"}',
-    );
-    expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
-    expect(result.status).toBe("completed");
-    expect(result.blackboard?.mailbox).toBe("jeshua@100monkeys.ai");
-    expect(result.blackboard?.SEED).toEqual({
-      status: "success",
-      exit_code: 0,
-      updated: ["mailbox", "notes_workspace", "page_prefix"],
-    });
-  });
-
-  it("answers success with exit code 0, so on_success and exit_code_zero take it", async () => {
-    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
-      baseDefinition(
-        {
-          FIRST: {
-            kind: "System",
-            command: "update_blackboard",
-            env: { stage: "first" },
-            transitions: [
-              { condition: "exit_code_zero", target: "SECOND" },
-              { condition: "always", target: "WRONG" },
-            ],
-          },
-          SECOND: {
-            kind: "System",
-            command: "{{next_command}}",
-            env: { stage: "second" },
-            transitions: [
-              { condition: "on_success", target: "DONE" },
-              { condition: "always", target: "WRONG" },
-            ],
-          },
-          DONE: {
-            kind: "Agent",
-            agent: "reader",
-            input: "stage {{blackboard.stage}}",
-            transitions: [],
-          },
-          WRONG: {
-            kind: "Agent",
-            agent: "wrong",
-            input: "wrong",
-            transitions: [],
-          },
-        },
-        "FIRST",
-      ),
-    );
-
-    const result = await aegis_workflow({
-      workflow_id: "wf-1",
-      input: {},
-      blackboard: { next_command: "update_blackboard" },
-    });
-
-    expect(result.final_state).toBe("DONE");
-    expect(activityMocks.executeAgentActivity.mock.calls[0][0].input).toBe(
-      "stage second",
-    );
-    expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
-    expect(result.blackboard?.FIRST).toEqual({
-      status: "success",
-      exit_code: 0,
-      updated: ["stage"],
-    });
-  });
-
-  it.each([
-    "input",
-    "intent",
-    "tenant_id",
-    "attachments",
-    "workflow",
-    "blackboard",
-    "SEED",
-    "RECONCILE",
-  ])(
-    "refuses the reserved key '%s', fails the state and writes nothing",
-    async (key) => {
-      const definition = triageDefinition();
-      definition.states.SEED.env = {
-        mailbox: "{{input.mailbox}}",
-        [key]: "overwritten",
-      };
-      activityMocks.fetchWorkflowDefinition.mockResolvedValue(definition);
-
-      const result = await aegis_workflow({
-        workflow_id: "wf-1",
-        input: { mailbox: "jeshua@100monkeys.ai" },
-      });
-
-      expect(result.status).toBe("failed");
-      expect(result.error).toBe(
-        `update_blackboard cannot write the reserved key '${key}'.`,
-      );
-      expect(result.final_state).toBe("SEED");
-      expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
-      expect(activityMocks.executeAgentActivity).not.toHaveBeenCalled();
-      expect(result.blackboard?.mailbox).toBeUndefined();
-      expect(result.blackboard?.input).toEqual({
-        mailbox: "jeshua@100monkeys.ai",
-      });
-      expect(result.blackboard?.SEED).toBeUndefined();
-    },
-  );
-
-  it("every other command still runs through the system command activity", async () => {
-    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
-      baseDefinition(
-        {
-          RUN: {
-            kind: "System",
-            command: "update_blackboard --dry-run",
-            env: { mailbox: "{{input.mailbox}}" },
-            transitions: [],
-          },
-        },
-        "RUN",
-      ),
-    );
-
-    const result = await aegis_workflow({
-      workflow_id: "wf-1",
-      input: { mailbox: "jeshua@100monkeys.ai" },
-    });
-
-    expect(activityMocks.executeSystemCommandActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "update_blackboard --dry-run",
-        env: { mailbox: "jeshua@100monkeys.ai" },
-      }),
-    );
-    expect(result.blackboard?.mailbox).toBeUndefined();
-  });
-});
-
 describe("per-agent temperature threading", () => {
   beforeEach(() => {
     for (const fn of Object.values(activityMocks)) {
@@ -2850,198 +2644,6 @@ describe("an Agent state's activity limit follows its agent's run limit", () => 
   });
 });
 
-// The Forge's repository steps: `repository_diff`, `repository_commit` and
-// `repository_land` are the interpreter's own System commands, answered by the
-// orchestrator's RunRepositoryAction on the run's repository and never sent to
-// a shell.
-describe("repository steps are the interpreter's own commands", () => {
-  beforeEach(() => {
-    for (const fn of Object.values(activityMocks)) {
-      fn.mockReset();
-    }
-    activityMocks.publishEventActivity.mockResolvedValue(undefined);
-    activityMocks.executeSystemCommandActivity.mockResolvedValue({
-      status: "success",
-      exit_code: 0,
-      stdout: "",
-      stderr: "",
-    });
-    activityMocks.executeAgentActivity.mockResolvedValue({
-      status: "completed",
-      output: "{}",
-      iterations: 1,
-    });
-  });
-
-  it.each([
-    ["repository_diff", "diff"],
-    ["repository_commit", "commit"],
-    ["repository_land", "land"],
-  ])(
-    "'%s' calls the repository action '%s' for the run, and never a system command",
-    async (command, action) => {
-      activityMocks.runRepositoryActionActivity.mockResolvedValue({
-        commit_sha: action === "diff" ? undefined : "abc1234",
-        branch: "aegis/run-exec-123",
-        ref: "main",
-        diff: action === "diff" ? "diff --git a/x b/x" : undefined,
-      });
-      activityMocks.fetchWorkflowDefinition.mockResolvedValue(
-        baseDefinition(
-          {
-            STEP: {
-              kind: "System",
-              command,
-              env: { message: "the-forge: {{input.task}}" },
-              transitions: [],
-            },
-          },
-          "STEP",
-        ),
-      );
-
-      const result = await aegis_workflow({
-        workflow_id: "wf-1",
-        input: { task: "name the judge" },
-        tenant_id: "tenant-a",
-      });
-
-      expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
-      expect(activityMocks.runRepositoryActionActivity).toHaveBeenCalledTimes(
-        1,
-      );
-      expect(activityMocks.runRepositoryActionActivity).toHaveBeenCalledWith({
-        workflow_execution_id: "exec-123",
-        action,
-        message: action === "commit" ? "the-forge: name the judge" : undefined,
-        tenant_id: "tenant-a",
-      });
-      expect(result.status).toBe("completed");
-      expect(result.blackboard?.STEP).toEqual({
-        status: "success",
-        exit_code: 0,
-        output: {
-          commit_sha: action === "diff" ? undefined : "abc1234",
-          branch: "aegis/run-exec-123",
-          ref: "main",
-          diff: action === "diff" ? "diff --git a/x b/x" : undefined,
-        },
-      });
-    },
-  );
-
-  it("a later state reads the diff as {{DIFF.output.diff}}", async () => {
-    activityMocks.runRepositoryActionActivity.mockResolvedValue({
-      branch: "aegis/run-exec-123",
-      ref: "main",
-      diff: "+one line",
-    });
-    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
-      baseDefinition(
-        {
-          DIFF: {
-            kind: "System",
-            command: "repository_diff",
-            transitions: [{ condition: "on_success", target: "AUDIT" }],
-          },
-          AUDIT: {
-            kind: "Agent",
-            agent: "code-reviewer-agent",
-            input: "review: {{DIFF.output.diff}}",
-            transitions: [],
-          },
-        },
-        "DIFF",
-      ),
-    );
-
-    await aegis_workflow({ workflow_id: "wf-1", input: {} });
-
-    expect(activityMocks.executeAgentActivity.mock.calls[0][0].input).toBe(
-      "review: +one line",
-    );
-  });
-
-  it("an answer's sentence fails the state with that sentence, and on_failure takes it", async () => {
-    const sentence =
-      "the remote branch 'main' has commits this run does not have; nothing was landed";
-    activityMocks.runRepositoryActionActivity.mockResolvedValue({
-      branch: "aegis/run-exec-123",
-      ref: "main",
-      sentence,
-    });
-    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
-      baseDefinition(
-        {
-          LAND: {
-            kind: "System",
-            command: "repository_land",
-            transitions: [
-              { condition: "on_success", target: "COMPLETE" },
-              { condition: "on_failure", target: "LAND_REFUSED" },
-            ],
-          },
-          COMPLETE: {
-            kind: "Agent",
-            agent: "complete",
-            input: "landed",
-            transitions: [],
-          },
-          LAND_REFUSED: {
-            kind: "Agent",
-            agent: "refused",
-            input: "refused: {{{LAND.output.sentence}}}",
-            transitions: [],
-          },
-        },
-        "LAND",
-      ),
-    );
-
-    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
-
-    expect(result.final_state).toBe("LAND_REFUSED");
-    expect(result.blackboard?.LAND).toEqual({
-      status: "failed",
-      exit_code: 1,
-      error: sentence,
-      output: {
-        commit_sha: undefined,
-        branch: "aegis/run-exec-123",
-        ref: "main",
-        diff: undefined,
-        sentence,
-      },
-    });
-    expect(activityMocks.executeAgentActivity.mock.calls[0][0].input).toBe(
-      `refused: ${sentence}`,
-    );
-    expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
-  });
-
-  it("every other command still runs through the system command activity", async () => {
-    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
-      baseDefinition(
-        {
-          RUN: {
-            kind: "System",
-            command: "repository_diff --stat",
-            transitions: [],
-          },
-        },
-        "RUN",
-      ),
-    );
-
-    await aegis_workflow({ workflow_id: "wf-1", input: {} });
-
-    expect(activityMocks.runRepositoryActionActivity).not.toHaveBeenCalled();
-    expect(activityMocks.executeSystemCommandActivity).toHaveBeenCalledWith(
-      expect.objectContaining({ command: "repository_diff --stat" }),
-    );
-  });
-});
-
 // The Forge's EXECUTE_TESTS: a ContainerRun step's `repository` volume and its
 // `network_mode` reach the orchestrator as the manifest names them; the
 // orchestrator mounts the run's repository and picks the step network.
@@ -3668,5 +3270,182 @@ describe("an Action state runs the workflow's own operation", () => {
     expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
     expect(activityMocks.runRepositoryActionActivity).not.toHaveBeenCalled();
     expect(result.blackboard?.STEP).toBeUndefined();
+  });
+});
+
+// A System state runs a shell command only. One whose rendered command is an
+// action's name is refused before any process starts, and never reaches a
+// shell or the orchestrator's repository action.
+describe("a System state written as an action is refused", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.executeSystemCommandActivity.mockResolvedValue({
+      status: "success",
+      exit_code: 0,
+      stdout: "",
+      stderr: "",
+    });
+    activityMocks.runRepositoryActionActivity.mockResolvedValue({
+      commit_sha: "abc1234",
+      branch: "aegis/run-exec-123",
+      ref: "main",
+    });
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "completed",
+      output: "{}",
+      iterations: 1,
+    });
+  });
+
+  const names = [
+    "update_blackboard",
+    "repository_diff",
+    "repository_commit",
+    "repository_land",
+  ];
+
+  const forms: Array<
+    [string, (name: string) => string, Record<string, unknown>]
+  > = [
+    ["written literally", (name) => name, {}],
+    ["written with surrounding space", (name) => `  ${name}\n`, {}],
+    ["rendered from a template", () => "{{blackboard.step_command}}", {}],
+  ];
+
+  for (const name of names) {
+    it.each(forms)(
+      `'${name}' %s fails the state with the refusal and starts no process`,
+      async (_form, command) => {
+        activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+          baseDefinition(
+            {
+              STEP: {
+                kind: "System",
+                command: command(name),
+                env: { message: "the-forge: {{input.task}}" },
+                transitions: [
+                  { condition: "on_success", target: "AFTER" },
+                  { condition: "on_failure", target: "AFTER" },
+                ],
+              },
+              AFTER: {
+                kind: "Agent",
+                agent: "after",
+                input: "after",
+                transitions: [],
+              },
+            },
+            "STEP",
+          ),
+        );
+
+        const result = await aegis_workflow({
+          workflow_id: "wf-1",
+          input: { task: "name the judge" },
+          blackboard: { step_command: name },
+        });
+
+        expect(result.status).toBe("failed");
+        expect(result.final_state).toBe("STEP");
+        expect(result.error).toBe(
+          `a System state runs a shell command; '${name}' is an action: write kind: Action, action: ${name}`,
+        );
+        expect(
+          activityMocks.executeSystemCommandActivity,
+        ).toHaveBeenCalledTimes(0);
+        expect(activityMocks.runRepositoryActionActivity).toHaveBeenCalledTimes(
+          0,
+        );
+        expect(activityMocks.executeAgentActivity).toHaveBeenCalledTimes(0);
+        expect(result.blackboard?.STEP).toBeUndefined();
+        expect(result.blackboard?.message).toBeUndefined();
+      },
+    );
+  }
+
+  it("an ordinary command still runs through the system command activity", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          RUN: {
+            kind: "System",
+            command: "{{blackboard.step_command}} --stat",
+            env: { mailbox: "{{input.mailbox}}" },
+            transitions: [],
+          },
+        },
+        "RUN",
+      ),
+    );
+
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { mailbox: "jeshua@100monkeys.ai" },
+      blackboard: { step_command: "repository_diff" },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(activityMocks.runRepositoryActionActivity).toHaveBeenCalledTimes(0);
+    expect(activityMocks.executeSystemCommandActivity).toHaveBeenCalledTimes(1);
+    expect(activityMocks.executeSystemCommandActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "repository_diff --stat",
+        env: { mailbox: "jeshua@100monkeys.ai" },
+      }),
+    );
+  });
+
+  it("a command that only begins with an action's name still runs: update_blackboard --dry-run", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          RUN: {
+            kind: "System",
+            command: "update_blackboard --dry-run",
+            env: { mailbox: "{{input.mailbox}}" },
+            transitions: [],
+          },
+        },
+        "RUN",
+      ),
+    );
+
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { mailbox: "jeshua@100monkeys.ai" },
+    });
+
+    expect(activityMocks.executeSystemCommandActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "update_blackboard --dry-run",
+        env: { mailbox: "jeshua@100monkeys.ai" },
+      }),
+    );
+    expect(result.blackboard?.mailbox).toBeUndefined();
+  });
+
+  it("a command that only begins with an action's name still runs: repository_diff --stat", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          RUN: {
+            kind: "System",
+            command: "repository_diff --stat",
+            transitions: [],
+          },
+        },
+        "RUN",
+      ),
+    );
+
+    await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(activityMocks.runRepositoryActionActivity).not.toHaveBeenCalled();
+    expect(activityMocks.executeSystemCommandActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "repository_diff --stat" }),
+    );
   });
 });
