@@ -82,13 +82,15 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-  # Redeploy the temporal pod on nuclear-vm-1 with the image just
-  # pushed: dispatch aegis-platform-deployment's deploy-pod.yml (a reusable
-  # call is impossible from this public repository to that internal one),
-  # find that run by its run-name "deploy-pod temporal <sha>", and watch
-  # it to its end, so this run goes red when the deploy does. Without the
-  # organisation secret AEGIS_DEPLOY_DISPATCH_TOKEN this job fails, naming
-  # it: a merge that does not deploy is visible.
+  # Redeploy the worker's own pod, temporal-worker (pod aegis-temporal-worker),
+  # on nuclear-vm-1 with the image just pushed, leaving the Temporal server's
+  # pod aegis-temporal running: dispatch aegis-platform-deployment's
+  # deploy-pod.yml (a reusable call is impossible from this public repository
+  # to that internal one), find that run by its run-name "deploy-pod
+  # temporal-worker <sha>", and watch it to its end, so this run goes red
+  # when the deploy does. Without the organisation secret
+  # AEGIS_DEPLOY_DISPATCH_TOKEN this job fails, naming it: a merge that does
+  # not deploy is visible.
   deploy:
     name: Deploy temporal (nuclear-vm-1)
     needs: [build-and-push]
@@ -104,7 +106,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.AEGIS_DEPLOY_DISPATCH_TOKEN }}
           DEPLOY_REPO: 100monkeys-ai/aegis-platform-deployment
-          POD: temporal
+          POD: temporal-worker
           IMAGE: aegis-temporal-worker
         run: |
           if [ -z "$GH_TOKEN" ]; then
