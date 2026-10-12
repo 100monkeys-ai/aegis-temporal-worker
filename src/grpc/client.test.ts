@@ -374,6 +374,79 @@ describe("AegisRuntimeClient.executeAgent", () => {
     ]);
   });
 
+  /** Stream run exec-6's first iteration, then end the stream with no terminal event. */
+  async function streamEndsWithoutTerminalEvent() {
+    const call = mockCall();
+    mocks.executeAgentRpcMock.mockReturnValue(call);
+    const { aegisRuntimeClient } = await import("./client.js");
+    const promise = aegisRuntimeClient.executeAgent({
+      agent_id: "agent-1",
+      input: "plan",
+      context_json: "{}",
+      timeout_seconds: 300,
+    });
+    await callStarted();
+    call.emit("data", {
+      event: "iteration_started",
+      iteration_started: {
+        execution_id: "exec-6",
+        iteration_number: 1,
+        started_at: "2026-10-12T00:00:00Z",
+      },
+    });
+    call.emit("end");
+    return promise;
+  }
+
+  it("ends the poll as a failure carrying the run's own error when the record names it beside its status", async () => {
+    vi.useFakeTimers();
+    process.env.AEGIS_EXECUTION_FALLBACK_MAX_RETRIES = "2";
+    mocks.fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: "exec-6",
+        status: "Failed",
+        final_output: null,
+        error: "the model refused the request",
+      }),
+    });
+
+    const promise = streamEndsWithoutTerminalEvent();
+    await vi.advanceTimersByTimeAsync(200);
+    const result = await promise;
+
+    expect(result[result.length - 1]).toMatchObject({
+      event_type: "ExecutionFailed",
+      execution_id: "exec-6",
+      reason: "the model refused the request",
+    });
+  });
+
+  it("reads an error with no status as a refusal of the read, not as the run's end", async () => {
+    vi.useFakeTimers();
+    process.env.AEGIS_EXECUTION_FALLBACK_MAX_RETRIES = "2";
+    mocks.fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ error: "Execution not found" }),
+    });
+
+    const promise = streamEndsWithoutTerminalEvent();
+    await vi.advanceTimersByTimeAsync(200);
+    const result = await promise;
+
+    const refusals = mocks.logger.warn.mock.calls.filter(
+      ([, msg]: [any, string]) =>
+        msg === "Failed to fetch persisted execution status",
+    );
+    expect(refusals.length).toBeGreaterThanOrEqual(1);
+    for (const [ctx] of refusals) {
+      expect(ctx.error).toBe("Execution not found");
+    }
+    const lastEvent = result[result.length - 1];
+    expect(lastEvent.event_type).toBe("ExecutionFailed");
+    expect(lastEvent.reason).toContain("polling exhausted");
+  });
+
   it("logs the actual error message when fetch fails, not an empty object", async () => {
     vi.useFakeTimers();
     const call = mockCall();

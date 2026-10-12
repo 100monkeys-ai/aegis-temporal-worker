@@ -79,6 +79,12 @@ export const EXECUTION_FALLBACK_DEADLINE_MARGIN_MS = 60_000;
 
 interface PersistedExecutionStatusResponse {
   status?: string;
+  error?: string | null;
+}
+
+/** A run's persisted status, lower case, and its own error once it has ended. */
+interface PersistedExecutionStatus {
+  status: string | null;
   error?: string;
 }
 
@@ -133,10 +139,17 @@ export interface ExecuteAgentHooks {
   stepTimeoutMs?: number;
 }
 
+/**
+ * The persisted status of a run (`GET /v1/executions/{id}`). Once the run has
+ * ended the record also names its own error beside its status; that error is
+ * the run's, and becomes the reason a synthesized failure carries. An `error`
+ * with no status is the route refusing the read (the run not found), never the
+ * run's end, so it throws and the poll tries again.
+ */
 async function fetchPersistedExecutionStatus(
   executionId: string,
   tenantId?: string,
-): Promise<string | null> {
+): Promise<PersistedExecutionStatus> {
   const token = await getServiceToken();
   // The service account reads in aegis-system unless it names the tenant the
   // execution belongs to, as ExecuteAgent's metadata does.
@@ -152,11 +165,18 @@ async function fetchPersistedExecutionStatus(
   }
 
   const payload = (await resp.json()) as PersistedExecutionStatusResponse;
-  if (payload.error) {
+  const status =
+    typeof payload.status === "string" ? payload.status.toLowerCase() : null;
+  if (status === null && payload.error) {
     throw new Error(payload.error);
   }
 
-  return payload.status?.toLowerCase() ?? null;
+  return {
+    status,
+    ...(typeof payload.error === "string" && payload.error.length > 0
+      ? { error: payload.error }
+      : {}),
+  };
 }
 
 function latestKnownOutput(events: ExecutionEvent[]): string | undefined {
@@ -196,6 +216,7 @@ function synthesizeTerminalEvent(
   status: string,
   executionId: string,
   events: ExecutionEvent[],
+  persistedError?: string,
 ): ExecutionEvent | null {
   const timestamp = new Date().toISOString();
   const totalIterations = highestIteration(events);
@@ -215,6 +236,7 @@ function synthesizeTerminalEvent(
         execution_id: executionId,
         timestamp,
         reason:
+          persistedError ??
           latestFailureReason(events) ??
           "Execution reached persisted failed state",
         total_iterations: totalIterations,
@@ -225,6 +247,7 @@ function synthesizeTerminalEvent(
         execution_id: executionId,
         timestamp,
         reason:
+          persistedError ??
           latestFailureReason(events) ??
           "Execution reached persisted cancelled state",
         total_iterations: totalIterations,
@@ -563,7 +586,7 @@ class AegisRuntimeClient {
         pollAttempt++;
 
         try {
-          const status = await fetchPersistedExecutionStatus(
+          const { status, error } = await fetchPersistedExecutionStatus(
             executionId,
             request.tenant_id,
           );
@@ -572,6 +595,7 @@ class AegisRuntimeClient {
               status,
               executionId,
               events,
+              error,
             );
 
             if (synthesizedEvent) {
