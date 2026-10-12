@@ -1061,27 +1061,63 @@ async function executeState(
 
       // The person reads the prompt rendered against the blackboard and the
       // prior states' outputs, as an Agent state's input is rendered.
+      const gatePrompt = renderTemplate(state.prompt, blackboard);
       await emit("HumanInputRequested", {
-        prompt: renderTemplate(state.prompt, blackboard),
+        prompt: gatePrompt,
         default_response: state.default_response,
       });
 
-      // Signal already registered at aegis_workflow() root — just wait for it.
-      const timeout = state.timeout ? parseTimeout(state.timeout) : 3600;
-      await condition(() => humanSignal.getResponse() !== null, timeout * 1000);
+      // The answers this gate takes: its input transitions. A gate with none
+      // takes any answer and leaves it to its other transitions.
+      const inputTransitions = state.transitions.filter((t) =>
+        INPUT_CONDITIONS.has(t.condition),
+      );
 
-      const hr = humanSignal.getResponse();
-      const hf = humanSignal.getFeedback();
-      humanSignal.clearResponse();
+      // Signal already registered at aegis_workflow() root — just wait for it,
+      // within one timeout however many answers the gate refuses.
+      const timeoutMs =
+        (state.timeout ? parseTimeout(state.timeout) : 3600) * 1000;
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs > 0) {
+          await condition(
+            () => humanSignal.getResponse() !== null,
+            remainingMs,
+          );
+        }
 
-      if (hr === null) {
-        if (state.default_response)
-          return { response: state.default_response, timeout: true };
-        throw new Error("Human input timeout");
+        const hr = humanSignal.getResponse();
+        const hf = humanSignal.getFeedback();
+        humanSignal.clearResponse();
+
+        if (hr === null) {
+          if (state.default_response)
+            return { response: state.default_response, timeout: true };
+          throw new Error("Human input timeout");
+        }
+
+        let taken = inputTransitions.length === 0;
+        for (const t of inputTransitions) {
+          if (await evaluateCondition(t, { response: hr }, blackboard)) {
+            taken = true;
+            break;
+          }
+        }
+        if (taken) {
+          return hf === undefined
+            ? { response: hr, timeout: false }
+            : { response: hr, feedback: hf, timeout: false };
+        }
+
+        // A word the gate does not take never leaves it (run `9f279438`,
+        // 2026-10-12: "approved" at a yes/no gate completed the run with
+        // nothing done). The gate is posted again, opening with the refusal.
+        await emit("HumanInputRequested", {
+          prompt: `"${hr}" is not an answer this gate takes; answer ${gateWords(inputTransitions)}.\n\n${gatePrompt}`,
+          default_response: state.default_response,
+        });
       }
-      return hf === undefined
-        ? { response: hr, timeout: false }
-        : { response: hr, feedback: hf, timeout: false };
 
     case "ParallelAgents": {
       if (!state.agents || !state.consensus)
@@ -1546,6 +1582,29 @@ const SCORE_CONDITIONS: ReadonlySet<TransitionRule["condition"]> = new Set<
   "score_and_confidence_above",
   "consensus",
 ]);
+
+/** The transitions that route a Human state on the person's answer. */
+const INPUT_CONDITIONS: ReadonlySet<TransitionRule["condition"]> = new Set<
+  TransitionRule["condition"]
+>(["input_equals", "input_equals_yes", "input_equals_no"]);
+
+/** The words a gate's input transitions take, as the person reads them: "yes or no". */
+function gateWords(transitions: TransitionRule[]): string {
+  const words = [
+    ...new Set(
+      transitions.map((t) =>
+        t.condition === "input_equals_yes"
+          ? "yes"
+          : t.condition === "input_equals_no"
+            ? "no"
+            : String(t.value),
+      ),
+    ),
+  ];
+  return words.length > 1
+    ? `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`
+    : words[0];
+}
 
 async function evaluateCondition(
   t: TransitionRule,

@@ -3112,6 +3112,105 @@ describe("a Human gate shows its rendered prompt and carries the person's feedba
     });
     expect(activityMocks.executeAgentActivity).toHaveBeenCalledTimes(2);
   });
+
+  // Run `9f279438` (2026-10-12): Zaru answered a yes/no gate "approved", no
+  // transition matched, and the run completed with nothing done. A word the
+  // gate does not take never leaves it: the gate is posted again, opening with
+  // the refusal, and waits for an answer it takes.
+  const GATE_PROMPT =
+    "Approve the requirements for name the judge:\nR1. The judge is code-quality-judge.";
+
+  it("keeps a yes/no gate signalled 'approved' at the gate and posts it again opening with the refusal", async () => {
+    gateDefinition("{{input.task}}");
+    signals.push(["approved", "Approved: proceed with the design."]);
+
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { task: "name the judge" },
+    });
+
+    // No answer the gate takes ever came: the gate times out there.
+    expect(result.status).toBe("failed");
+    expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
+    expect(humanInputRequested()).toHaveLength(2);
+    expect(humanInputRequested()[1].prompt).toBe(
+      `"approved" is not an answer this gate takes; answer yes or no.\n\n${GATE_PROMPT}`,
+    );
+    // It waits again within what is left of the gate's timeout.
+    const waits = vi.mocked(condition).mock.calls.map((call) => call[1]);
+    expect(waits).toHaveLength(2);
+    expect(waits[1]).toBeLessThanOrEqual(waits[0] as number);
+  });
+
+  it("advances to the yes transition's target on 'yes' after a refused word", async () => {
+    gateDefinition("{{input.task}}");
+    signals.push(["approved"], ["yes"]);
+
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { task: "name the judge" },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.final_state).toBe("DONE");
+    expect(activityMocks.executeSystemCommandActivity).toHaveBeenCalledTimes(1);
+    expect(activityMocks.executeAgentActivity).toHaveBeenCalledTimes(1);
+    expect(result.blackboard?.APPROVE).toEqual({
+      response: "yes",
+      timeout: false,
+    });
+    expect(humanInputRequested()).toHaveLength(2);
+  });
+
+  function shipGateDefinition() {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          APPROVE: {
+            kind: "Human",
+            timeout: "3600s",
+            prompt: "Ship it?",
+            transitions: [
+              { condition: "input_equals", value: "ship", target: "DONE" },
+            ],
+          },
+          DONE: { kind: "System", command: "true", transitions: [] },
+        },
+        "APPROVE",
+      ),
+    );
+    activityMocks.executeSystemCommandActivity.mockResolvedValue({
+      status: "success",
+      exit_code: 0,
+      stdout: "",
+      stderr: "",
+    });
+  }
+
+  it("accepts 'ship' at an input_equals: ship gate", async () => {
+    shipGateDefinition();
+    signals.push(["ship"]);
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("completed");
+    expect(result.final_state).toBe("DONE");
+    expect(humanInputRequested()).toHaveLength(1);
+  });
+
+  it("posts an input_equals: ship gate again on 'yes', and advances on 'ship'", async () => {
+    shipGateDefinition();
+    signals.push(["yes"], ["ship"]);
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("completed");
+    expect(result.final_state).toBe("DONE");
+    expect(humanInputRequested().map((event) => event.prompt)).toEqual([
+      "Ship it?",
+      '"yes" is not an answer this gate takes; answer ship.\n\nShip it?',
+    ]);
+  });
 });
 
 // An `Action` state is the workflow's own deterministic operation: the
