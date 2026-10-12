@@ -557,6 +557,103 @@ describe("aegis_workflow container orchestration behavior", () => {
     );
   });
 
+  it("routes an Agent state's failed execution to its on_failure transition", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          DRAFT: {
+            kind: "Agent",
+            agent: "outreach-drafter",
+            input: "draft",
+            transitions: [
+              { condition: "on_success", target: "SEND" },
+              { condition: "on_failure", target: "REJECTED" },
+            ],
+          },
+          SEND: {
+            kind: "System",
+            command: "echo send",
+            transitions: [],
+          },
+          REJECTED: {
+            kind: "System",
+            command: "echo rejected",
+            transitions: [],
+          },
+        },
+        "DRAFT",
+      ),
+    );
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "failed",
+      error: "Failed to execute task: Max retries exceeded",
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    const eventTypes = activityMocks.publishEventActivity.mock.calls.map(
+      ([event]) => event.event_type,
+    );
+    expect(result.final_state).toBe("REJECTED");
+    expect(result.status).toBe("completed");
+    expect(
+      eventTypes.filter((t) => t === "WorkflowIterationFailed"),
+    ).toHaveLength(1);
+    expect(activityMocks.publishEventActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: "WorkflowIterationFailed",
+        error:
+          "Agent execution failed: Failed to execute task: Max retries exceeded",
+      }),
+    );
+    expect(eventTypes).not.toContain("WorkflowExecutionFailed");
+    expect(result.blackboard?.DRAFT).toEqual({
+      status: "failed",
+      error:
+        "Agent execution failed: Failed to execute task: Max retries exceeded",
+    });
+    expect(activityMocks.executeSystemCommandActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "echo rejected" }),
+    );
+  });
+
+  it("fails the run when an Agent state's execution fails and it declares no on_failure transition", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          DRAFT: {
+            kind: "Agent",
+            agent: "outreach-drafter",
+            input: "draft",
+            transitions: [{ condition: "on_success", target: "SEND" }],
+          },
+          SEND: {
+            kind: "System",
+            command: "echo send",
+            transitions: [],
+          },
+        },
+        "DRAFT",
+      ),
+    );
+    activityMocks.executeAgentActivity.mockResolvedValue({
+      status: "failed",
+      error: "Failed to execute task: Max retries exceeded",
+    });
+
+    const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+    expect(result.status).toBe("failed");
+    expect(result.final_state).toBe("DRAFT");
+    expect(result.error).toBe(
+      "Agent execution failed: Failed to execute task: Max retries exceeded",
+    );
+    expect(activityMocks.publishEventActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: "WorkflowExecutionFailed" }),
+    );
+    expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
+  });
+
   it("stores Agent output under a nested output field and transitions out of PLAN on completion", async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue(
       baseDefinition(

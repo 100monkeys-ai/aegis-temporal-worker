@@ -936,10 +936,16 @@ async function executeState(
             `\n\nValidation failed with score ${iterScore}.\nReasoning: ${validationResult.reasoning}\nPlease refine your response.`;
           iteration++;
         } catch (error) {
+          const failure = failureWithCauses(error);
           await emit("WorkflowIterationFailed", {
             iteration_number: iteration,
-            error: failureWithCauses(error),
+            error: failure,
           });
+          // A state that declares an on_failure transition routes its failed
+          // execution there, as its manifest says; without one the run fails.
+          if (state.transitions?.some((t) => t.condition === "on_failure")) {
+            return { status: "failed" as const, error: failure };
+          }
           throw error;
         }
       }
