@@ -618,6 +618,109 @@ describe("an agent run starts once per step", () => {
     });
   });
 
+  /** The orchestrator's answer for run-1 once it has ended: its output and its error. */
+  function endedRun(
+    status: string,
+    final_output: string | null,
+    error: string | null,
+  ) {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        id: "run-1",
+        agent_id: AGENT,
+        status,
+        tenant_id: "tenant-a",
+        final_output,
+        error,
+      }),
+    });
+  }
+
+  it("answers the output of the completed run an earlier attempt began, as the stream's terminal event would", async () => {
+    inActivity({ run_begun: true, execution_id: "run-1" });
+    endedRun(
+      "Completed",
+      '```json\n{"answer": "done", "score": 0.9}\n```',
+      null,
+    );
+
+    const result = await executeAgentActivity({
+      agentId: AGENT,
+      input: "task",
+      context: {},
+      tenantId: "tenant-a",
+    });
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(cancelMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      status: "completed",
+      output: { answer: "done", score: 0.9 },
+      iterations: 0,
+      execution_id: "run-1",
+      score: 0.9,
+    });
+  });
+
+  it("answers the error of the failed run an earlier attempt began", async () => {
+    inActivity({ run_begun: true, execution_id: "run-1" });
+    endedRun("Failed", null, "the model refused the request");
+
+    const result = await executeAgentActivity({
+      agentId: AGENT,
+      input: "task",
+      context: {},
+      tenantId: "tenant-a",
+    });
+
+    expect(executeAgentMock).not.toHaveBeenCalled();
+    expect(cancelMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      status: "failed",
+      error: "the model refused the request",
+      iterations: 0,
+      execution_id: "run-1",
+    });
+  });
+
+  it("answers as before when the run's record carries neither its output nor its error", async () => {
+    inActivity({ run_begun: true, execution_id: "run-1" });
+    persistedStatus("Completed");
+
+    expect(
+      await executeAgentActivity({
+        agentId: AGENT,
+        input: "task",
+        context: {},
+        tenantId: "tenant-a",
+      }),
+    ).toEqual({
+      status: "completed",
+      output: "",
+      iterations: 0,
+      execution_id: "run-1",
+    });
+
+    inActivity({ run_begun: true, execution_id: "run-1" });
+    endedRun("Cancelled", null, null);
+
+    expect(
+      await executeAgentActivity({
+        agentId: AGENT,
+        input: "task",
+        context: {},
+        tenantId: "tenant-a",
+      }),
+    ).toEqual({
+      status: "failed",
+      error: "Execution reached persisted cancelled state",
+      iterations: 0,
+      execution_id: "run-1",
+    });
+  });
+
   it("starts no second run when an earlier attempt's details say a run began with no id, and is not retried", async () => {
     inActivity({ run_begun: true });
 

@@ -233,16 +233,28 @@ const RUN_STATUS_FIRST_POLL_MS = 1_000;
 const RUN_STATUS_MAX_POLL_MS = 30_000;
 
 /**
- * The persisted status of an agent run (`GET /v1/executions/{id}`), lower
- * case: the orchestrator's record, the same read the client's status polling
- * makes (`fetchPersistedExecutionStatus` in `grpc/client.ts`). The worker's
- * service account names the run's tenant in `X-Tenant-Id`. The record answers
- * the run's status only, not its output or its error.
+ * What a run's record answers (`GET /v1/executions/{id}`): its status, lower
+ * case, and once the run has ended its output (the last iteration's that has
+ * one) and its error. A record of a run not yet ended, or from an orchestrator
+ * that answers neither key, carries no output and no error.
+ */
+interface PersistedRun {
+  status: string | null;
+  finalOutput?: string;
+  error?: string;
+}
+
+/**
+ * The persisted record of an agent run (`GET /v1/executions/{id}`): the
+ * orchestrator's record, the same read the client's status polling makes
+ * (`fetchPersistedExecutionStatus` in `grpc/client.ts`). The worker's service
+ * account names the run's tenant in `X-Tenant-Id`. An `error` beside a status
+ * is the run's own error; an `error` with no status is a refusal of the read.
  */
 async function persistedRunStatus(
   executionId: string,
   tenantId: string | undefined,
-): Promise<string | null> {
+): Promise<PersistedRun> {
   const orchestratorUrl =
     process.env.AEGIS_ORCHESTRATOR_URL || "http://localhost:8088";
   const token = await getServiceToken();
@@ -257,9 +269,23 @@ async function persistedRunStatus(
       `Failed to fetch execution ${executionId} status (HTTP ${resp.status})`,
     );
   }
-  const payload = (await resp.json()) as { status?: string; error?: string };
-  if (payload.error) throw new Error(payload.error);
-  return payload.status?.toLowerCase() ?? null;
+  const payload = (await resp.json()) as {
+    status?: string;
+    final_output?: string | null;
+    error?: string | null;
+  };
+  const status =
+    typeof payload.status === "string" ? payload.status.toLowerCase() : null;
+  if (status === null && payload.error) throw new Error(payload.error);
+  return {
+    status,
+    ...(typeof payload.final_output === "string"
+      ? { finalOutput: payload.final_output }
+      : {}),
+    ...(typeof payload.error === "string" && payload.error.length > 0
+      ? { error: payload.error }
+      : {}),
+  };
 }
 
 /** Resolve after `ms`, or at once when `signal` aborts. */
@@ -280,10 +306,12 @@ function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
  * Re-attach to the run an earlier attempt of this step began: start none,
  * keep heartbeating the same details, and read the run's persisted status
  * until it ends or the step's deadline (this attempt's start-to-close) passes.
- * The answer is the one the earlier attempt would have given from the same
- * record: `completed`, or `failed` with the record's state. Past the deadline,
- * or cancelled, it ends as the earlier attempt would have: it asks the
- * orchestrator to cancel the run.
+ * The answer is the one the earlier attempt would have given from the run's
+ * terminal event: `completed` with the record's output, or `failed` with the
+ * record's error, or with its state where the record carries no error (a run
+ * that ended with none, or an orchestrator that answers neither). Past the
+ * deadline, or cancelled, it ends as the earlier attempt would have: it asks
+ * the orchestrator to cancel the run.
  */
 async function reattachToRun(
   executionId: string,
@@ -315,9 +343,9 @@ async function reattachToRun(
         throw signal.reason;
       }
 
-      let status: string | null = null;
+      let run: PersistedRun = { status: null };
       try {
-        status = await persistedRunStatus(executionId, tenantId);
+        run = await persistedRunStatus(executionId, tenantId);
       } catch (error) {
         logger.warn(
           {
@@ -329,10 +357,11 @@ async function reattachToRun(
         );
       }
 
+      const { status } = run;
       if (status === "completed") {
-        // The record carries no output: the answer is the one the earlier
-        // attempt gives when it resolves from the record with no output.
-        const output = normalizeAgentOutput(undefined);
+        // The output field and score as the stream's ExecutionCompleted
+        // gives them from its final_output; empty where the record has none.
+        const output = normalizeAgentOutput(run.finalOutput);
         const score = agentOutputScore(output);
         return {
           status: "completed",
@@ -345,7 +374,7 @@ async function reattachToRun(
       if (status && RUN_TERMINAL_STATUSES.has(status)) {
         return {
           status: "failed",
-          error: `Execution reached persisted ${status} state`,
+          error: run.error ?? `Execution reached persisted ${status} state`,
           iterations: 0,
           execution_id: executionId,
         };
