@@ -915,7 +915,9 @@ class AegisRuntimeClient {
   }
 
   /**
-   * Execute a deterministic container step without an LLM loop (ADR-050)
+   * Execute a deterministic container step without an LLM loop (ADR-050).
+   * The worker's service account acts in the run's tenant, named by
+   * `x-tenant-id` and by the request's `tenant_id`.
    */
   async executeContainerRun(
     request: ExecuteContainerRunRequest,
@@ -923,6 +925,9 @@ class AegisRuntimeClient {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
     meta.add("authorization", `Bearer ${token}`);
+    if (request.tenant_id) {
+      meta.add("x-tenant-id", request.tenant_id);
+    }
     await this.waitForChannel("ExecuteContainerRun");
     return new Promise((resolve, reject) => {
       this.client.ExecuteContainerRun(

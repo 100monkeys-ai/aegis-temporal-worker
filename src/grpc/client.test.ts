@@ -826,6 +826,83 @@ describe("AegisRuntimeClient.executeContainerRun", () => {
     expect(result.duration_ms).toBe(1033);
     expect(typeof result.duration_ms).toBe("number");
   });
+
+  // EXECUTE_TESTS of run ec3f9b6b: core reads a service account's step in the
+  // tenant `x-tenant-id` or the request's `tenant_id` names, else its own.
+  it("sends the run's tenant as x-tenant-id and as the request's tenant_id", async () => {
+    const executeContainerRunMock = vi.fn((_req: any, _meta: any, cb: any) => {
+      cb(null, {
+        exit_code: 0,
+        stdout: "",
+        stderr: "",
+        duration_ms: 1,
+        attempts: 1,
+      });
+    });
+    mocks.runtimeCtorMock.mockImplementation(function () {
+      return {
+        ExecuteContainerRun: executeContainerRunMock,
+        close: mocks.closeMock,
+        waitForReady: readyChannel,
+      };
+    });
+
+    const { aegisRuntimeClient } = await import("./client.js");
+    await aegisRuntimeClient.executeContainerRun({
+      execution_id: "exec-1",
+      state_name: "EXECUTE_TESTS",
+      name: "EXECUTE_TESTS",
+      image: "alpine:3.20",
+      command: ["true"],
+      volumes: [
+        {
+          name: "repository",
+          mount_path: "/workspace/repository",
+          read_only: false,
+        },
+      ],
+      workflow_execution_id: "exec-1",
+      tenant_id: "u-test",
+    });
+
+    const [request, meta] = executeContainerRunMock.mock.calls[0];
+    const tenantHeader = (meta.entries as Array<[string, string]>)
+      .filter(([key]) => key === "x-tenant-id")
+      .map(([, value]) => value);
+    expect(tenantHeader).toEqual(["u-test"]);
+    expect(request.tenant_id).toBe("u-test");
+  });
+
+  it("sends no tenant header when the request names no tenant", async () => {
+    const executeContainerRunMock = vi.fn((_req: any, _meta: any, cb: any) => {
+      cb(null, {
+        exit_code: 0,
+        stdout: "",
+        stderr: "",
+        duration_ms: 1,
+        attempts: 1,
+      });
+    });
+    mocks.runtimeCtorMock.mockImplementation(function () {
+      return {
+        ExecuteContainerRun: executeContainerRunMock,
+        close: mocks.closeMock,
+        waitForReady: readyChannel,
+      };
+    });
+
+    const { aegisRuntimeClient } = await import("./client.js");
+    await aegisRuntimeClient.executeContainerRun({
+      execution_id: "exec-1",
+      state_name: "BUILD",
+      name: "BUILD",
+      image: "node:24",
+      command: ["npm", "test"],
+    });
+
+    const [, meta] = executeContainerRunMock.mock.calls[0];
+    expect(meta.entries).toEqual([["authorization", "Bearer test-token"]]);
+  });
 });
 
 describe("AegisRuntimeClient's channel", () => {

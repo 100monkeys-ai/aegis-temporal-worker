@@ -1210,6 +1210,7 @@ export async function executeParallelContainerRunActivity(params: {
   completion: "all_succeed" | "any_succeed" | "best_effort";
   image_pull_policy?: string;
   securityContextName?: string;
+  tenant_id?: string;
 }): Promise<{
   results: Array<{
     name: string;
@@ -1248,6 +1249,7 @@ export async function executeParallelContainerRunActivity(params: {
         registry_credentials: step.registry_credentials,
         shell: step.shell ?? false,
         max_attempts: 1,
+        tenant_id: params.tenant_id || undefined,
         security_context_name: params.securityContextName,
       };
       const response = await aegisRuntimeClient.executeContainerRun(request);

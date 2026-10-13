@@ -1240,6 +1240,7 @@ async function executeState(
         registry_credentials: state.container_run_registry_credentials,
         shell: state.container_run_shell ?? false,
         max_attempts: state.container_run_retry?.max_attempts ?? 1,
+        tenant_id: (blackboard.tenant_id as string | undefined) || undefined,
         security_context_name: securityContextName,
         workflow_execution_id: executionId,
         network_mode: state.container_run_network_mode,
@@ -1350,6 +1351,7 @@ async function executeState(
         steps: renderedSteps,
         completion: state.parallel_container_completion ?? "all_succeed",
         securityContextName,
+        tenant_id: (blackboard.tenant_id as string | undefined) || undefined,
       });
 
       const byStep = Object.fromEntries(

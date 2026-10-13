@@ -2841,6 +2841,76 @@ describe("a ContainerRun step's repository volume and network mode", () => {
     expect(call.network_mode).toBe("egress");
   });
 
+  // EXECUTE_TESTS of run ec3f9b6b: with no tenant on the request, core read
+  // the run in the worker's own tenant, found none, and refused the step.
+  it("names the run's tenant on the ContainerRun request", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          EXECUTE_TESTS: {
+            kind: "ContainerRun",
+            container_run_image: "alpine:3.20",
+            container_run_command: ["sh", "-c", "true"],
+            container_run_volumes: [
+              {
+                name: "repository",
+                mount_path: "/workspace/repository",
+                read_only: false,
+              },
+            ],
+            transitions: [],
+          },
+        },
+        "EXECUTE_TESTS",
+      ),
+    );
+
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {},
+      tenant_id: "u-test",
+    });
+
+    const call = activityMocks.executeContainerRunActivity.mock.calls[0][0];
+    expect(call.tenant_id).toBe("u-test");
+  });
+
+  it("names the run's tenant on the ParallelContainerRun activity", async () => {
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          CHECKS: {
+            kind: "ParallelContainerRun",
+            parallel_container_steps: [
+              { name: "a", image: "alpine:3.20", command: ["true"] },
+            ],
+            transitions: [],
+          },
+        },
+        "CHECKS",
+      ),
+    );
+    activityMocks.executeParallelContainerRunActivity.mockResolvedValue({
+      results: [
+        { name: "a", exit_code: 0, stdout: "", stderr: "", duration_ms: 1 },
+      ],
+      overall_success: true,
+      succeeded: 1,
+      failed: 0,
+      completion: "all_succeed",
+    });
+
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {},
+      tenant_id: "u-test",
+    });
+
+    const call =
+      activityMocks.executeParallelContainerRunActivity.mock.calls[0][0];
+    expect(call.tenant_id).toBe("u-test");
+  });
+
   it("sends no network_mode when the state names none", async () => {
     activityMocks.fetchWorkflowDefinition.mockResolvedValue(
       baseDefinition(
