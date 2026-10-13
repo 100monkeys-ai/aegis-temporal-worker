@@ -3028,8 +3028,10 @@ describe("the run's repository on the blackboard", () => {
 // against the blackboard, and a "no" carries the person's words back into the
 // state it re-enters, through the transition's `feedback:`.
 describe("a Human gate shows its rendered prompt and carries the person's feedback", () => {
-  /** The signals a person sends, one per Human state reached, in order. */
-  let signals: Array<[string, string?]>;
+  /** The signals a person sends, one per Human state reached, in order:
+   *  the response, the optional feedback (null when absent), and the
+   *  optional sub of the person who answered. */
+  let signals: Array<[string, (string | null)?, (string | null)?]>;
 
   beforeEach(() => {
     for (const fn of Object.values(activityMocks)) {
@@ -3051,7 +3053,7 @@ describe("a Human gate shows its rendered prompt and carries the person's feedba
       const next = signals.shift();
       if (next) {
         const handler = vi.mocked(setHandler).mock.calls.at(-1)?.[1] as (
-          ...args: Array<string | undefined>
+          ...args: Array<string | null | undefined>
         ) => void;
         handler(...next);
       }
@@ -3461,6 +3463,131 @@ describe("a Human gate shows its rendered prompt and carries the person's feedba
       expect(gates[0].state_name).toBe("NOTE");
       expect(gates[0].responses).toEqual([]);
       expect(gates[0].expires_at).toBe("2026-10-13T02:50:00.000Z");
+    });
+  });
+
+  // Zaru ADR-0058, Update `gate-card-2026-10-13`, D5n: an answered gate's
+  // history names who answered. The signal's optional third argument is the
+  // answerer's sub; the gate's WorkflowStateExited carries it beside the
+  // response, the feedback and the timeout flag.
+  describe("the gate's exit event names who answered", () => {
+    function gateExited() {
+      return activityMocks.publishEventActivity.mock.calls
+        .map((call) => call[0])
+        .filter(
+          (event) =>
+            event.event_type === "WorkflowStateExited" &&
+            event.state_name === "APPROVE",
+        );
+    }
+
+    it("carries answered_by from a signal that names the answerer", async () => {
+      gateDefinition("{{input.task}}");
+      signals.push(["yes", null, "u-test"]);
+
+      const result = await aegis_workflow({
+        workflow_id: "wf-1",
+        input: { task: "name the judge" },
+      });
+
+      expect(result.status).toBe("completed");
+      expect(gateExited()).toHaveLength(1);
+      expect(gateExited()[0].output).toStrictEqual({
+        response: "yes",
+        timeout: false,
+        answered_by: "u-test",
+      });
+    });
+
+    it("carries answered_by beside the feedback of a signal that gives both", async () => {
+      gateDefinition("{{input.task}}");
+      signals.push(["no", "Name the judge only.", "u-test"], ["yes"]);
+
+      const result = await aegis_workflow({
+        workflow_id: "wf-1",
+        input: { task: "name the judge" },
+      });
+
+      expect(result.status).toBe("completed");
+      expect(gateExited().map((event) => event.output)).toStrictEqual([
+        {
+          response: "no",
+          feedback: "Name the judge only.",
+          timeout: false,
+          answered_by: "u-test",
+        },
+        { response: "yes", timeout: false },
+      ]);
+    });
+
+    it("carries no answered_by from a signal that does not name the answerer", async () => {
+      gateDefinition("{{input.task}}");
+      signals.push(["yes"]);
+
+      const result = await aegis_workflow({
+        workflow_id: "wf-1",
+        input: { task: "name the judge" },
+      });
+
+      expect(result.status).toBe("completed");
+      expect(gateExited()).toHaveLength(1);
+      expect(gateExited()[0].output).toStrictEqual({
+        response: "yes",
+        timeout: false,
+      });
+    });
+
+    it("carries no answered_by from a signal whose feedback and answerer are null", async () => {
+      gateDefinition("{{input.task}}");
+      signals.push(["yes", null, null]);
+
+      const result = await aegis_workflow({
+        workflow_id: "wf-1",
+        input: { task: "name the judge" },
+      });
+
+      expect(result.status).toBe("completed");
+      expect(gateExited()).toHaveLength(1);
+      expect(gateExited()[0].output).toStrictEqual({
+        response: "yes",
+        timeout: false,
+      });
+    });
+
+    it("carries no answered_by when the gate times out on its default response", async () => {
+      activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+        baseDefinition(
+          {
+            APPROVE: {
+              kind: "Human",
+              timeout: "600s",
+              prompt: "Ship it?",
+              default_response: "no",
+              transitions: [
+                { condition: "input_equals_yes", target: "DONE" },
+                { condition: "input_equals_no", target: "DONE" },
+              ],
+            },
+            DONE: { kind: "System", command: "true", transitions: [] },
+          },
+          "APPROVE",
+        ),
+      );
+      activityMocks.executeSystemCommandActivity.mockResolvedValue({
+        status: "success",
+        exit_code: 0,
+        stdout: "",
+        stderr: "",
+      });
+
+      const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+      expect(result.status).toBe("completed");
+      expect(gateExited()).toHaveLength(1);
+      expect(gateExited()[0].output).toStrictEqual({
+        response: "no",
+        timeout: true,
+      });
     });
   });
 });

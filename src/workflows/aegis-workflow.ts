@@ -382,21 +382,32 @@ export async function aegis_workflow(
   // all Human states in the workflow. clearResponse() is called after each Human state
   // consumes the value so successive Human gates wait for distinct signals.
   // The signal's first argument is the response; its optional second is the
-  // person's feedback, read by a transition's `feedback:` as `{{human.feedback}}`.
-  const humanInputSignal = defineSignal<[string, string?]>("humanInput");
+  // person's feedback, read by a transition's `feedback:` as `{{human.feedback}}`;
+  // its optional third is the sub of the person who answered, which the
+  // gate's WorkflowStateExited carries as `answered_by`. The orchestrator sends
+  // null for either when it has none: a non-string is absent.
+  const humanInputSignal =
+    defineSignal<[string, string?, string?]>("humanInput");
   let humanResponse: string | null = null;
   let humanFeedback: string | undefined;
-  setHandler(humanInputSignal, (response: string, feedback?: string) => {
-    humanResponse = response;
-    humanFeedback = typeof feedback === "string" ? feedback : undefined;
-  });
+  let humanAnsweredBy: string | undefined;
+  setHandler(
+    humanInputSignal,
+    (response: string, feedback?: string, answeredBy?: string) => {
+      humanResponse = response;
+      humanFeedback = typeof feedback === "string" ? feedback : undefined;
+      humanAnsweredBy = typeof answeredBy === "string" ? answeredBy : undefined;
+    },
+  );
 
   const humanSignal: HumanSignal = {
     getResponse: () => humanResponse,
     getFeedback: () => humanFeedback,
+    getAnsweredBy: () => humanAnsweredBy,
     clearResponse: () => {
       humanResponse = null;
       humanFeedback = undefined;
+      humanAnsweredBy = undefined;
     },
   };
 
@@ -1099,6 +1110,7 @@ async function executeState(
 
         const hr = humanSignal.getResponse();
         const hf = humanSignal.getFeedback();
+        const hby = humanSignal.getAnsweredBy();
         humanSignal.clearResponse();
 
         if (hr === null) {
@@ -1115,9 +1127,14 @@ async function executeState(
           }
         }
         if (taken) {
-          return hf === undefined
-            ? { response: hr, timeout: false }
-            : { response: hr, feedback: hf, timeout: false };
+          // The gate's exit names who answered when the signal says so
+          // (Zaru ADR-0058 D5n); a timeout above carries no answerer.
+          return {
+            response: hr,
+            ...(hf === undefined ? {} : { feedback: hf }),
+            timeout: false,
+            ...(hby === undefined ? {} : { answered_by: hby }),
+          };
         }
 
         // A word the gate does not take never leaves it (run `9f279438`,

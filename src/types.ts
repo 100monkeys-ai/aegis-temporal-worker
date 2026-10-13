@@ -434,12 +434,15 @@ export interface HumanInputResult {
 }
 
 /**
- * The `humanInput` signal as a Human state reads it: the response, and the
- * person's optional feedback, the signal's second argument.
+ * The `humanInput` signal as a Human state reads it: the response, the
+ * person's optional feedback, the signal's second argument, and the optional
+ * sub of the person who answered, its third, which the gate's
+ * WorkflowStateExited output carries as `answered_by`.
  */
 export interface HumanSignal {
   getResponse: () => string | null;
   getFeedback: () => string | undefined;
+  getAnsweredBy: () => string | undefined;
   clearResponse: () => void;
 }
 
