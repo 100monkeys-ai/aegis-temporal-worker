@@ -15,6 +15,10 @@ export interface PublishEventParams {
   final_output?: any;
   artifacts?: string[];
   timestamp?: string;
+  /** The words a Human gate takes, in order; empty for any answer (HumanInputRequested). */
+  responses?: string[];
+  /** When a Human gate stops waiting, ISO 8601 (HumanInputRequested). */
+  expires_at?: string;
 }
 
 /**

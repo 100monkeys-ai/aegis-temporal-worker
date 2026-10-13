@@ -1062,21 +1062,31 @@ async function executeState(
       // The person reads the prompt rendered against the blackboard and the
       // prior states' outputs, as an Agent state's input is rendered.
       const gatePrompt = renderTemplate(state.prompt, blackboard);
-      await emit("HumanInputRequested", {
-        prompt: gatePrompt,
-        default_response: state.default_response,
-      });
 
       // The answers this gate takes: its input transitions. A gate with none
       // takes any answer and leaves it to its other transitions.
       const inputTransitions = state.transitions.filter((t) =>
         INPUT_CONDITIONS.has(t.condition),
       );
+      const timeoutMs =
+        (state.timeout ? parseTimeout(state.timeout) : 3600) * 1000;
+
+      // What a control of the person's needs to answer the gate: its state,
+      // the words it takes (none: any answer) and when it stops waiting, one
+      // timeout after its first post. Every post of this visit carries them.
+      const gate = {
+        state_name: stateName,
+        responses: gateResponses(inputTransitions),
+        expires_at: new Date(Date.now() + timeoutMs).toISOString(),
+      };
+      await emit("HumanInputRequested", {
+        prompt: gatePrompt,
+        default_response: state.default_response,
+        ...gate,
+      });
 
       // Signal already registered at aegis_workflow() root — just wait for it,
       // within one timeout however many answers the gate refuses.
-      const timeoutMs =
-        (state.timeout ? parseTimeout(state.timeout) : 3600) * 1000;
       const deadline = Date.now() + timeoutMs;
       for (;;) {
         const remainingMs = deadline - Date.now();
@@ -1116,6 +1126,7 @@ async function executeState(
         await emit("HumanInputRequested", {
           prompt: `"${hr}" is not an answer this gate takes; answer ${gateWords(inputTransitions)}.\n\n${gatePrompt}`,
           default_response: state.default_response,
+          ...gate,
         });
       }
 
@@ -1590,9 +1601,9 @@ const INPUT_CONDITIONS: ReadonlySet<TransitionRule["condition"]> = new Set<
   TransitionRule["condition"]
 >(["input_equals", "input_equals_yes", "input_equals_no"]);
 
-/** The words a gate's input transitions take, as the person reads them: "yes or no". */
-function gateWords(transitions: TransitionRule[]): string {
-  const words = [
+/** The words a gate's input transitions take, in their order, each once: ["yes", "no"]. */
+function gateResponses(transitions: TransitionRule[]): string[] {
+  return [
     ...new Set(
       transitions.map((t) =>
         t.condition === "input_equals_yes"
@@ -1603,6 +1614,11 @@ function gateWords(transitions: TransitionRule[]): string {
       ),
     ),
   ];
+}
+
+/** The words a gate's input transitions take, as the person reads them: "yes or no". */
+function gateWords(transitions: TransitionRule[]): string {
+  const words = gateResponses(transitions);
   return words.length > 1
     ? `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`
     : words[0];

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemporalWorkflowDefinition } from "../types.js";
 
 const { activityMocks, terminalActivityMocks, executeAgentRpcMock } =
@@ -3280,6 +3280,188 @@ describe("a Human gate shows its rendered prompt and carries the person's feedba
       "Ship it?",
       '"yes" is not an answer this gate takes; answer ship.\n\nShip it?',
     ]);
+  });
+
+  // A control of the person's (the gate card, Zaru ADR-0058 Update
+  // `gate-card-2026-10-13`) answers a gate from its event alone: the event
+  // names the gate's state, the words it takes and when it stops waiting.
+  describe("the gate's event carries its state, its words and its deadline", () => {
+    const POSTED_AT = "2026-10-13T02:40:00.000Z";
+    const EXPIRES_AT = "2026-10-13T03:40:00.000Z";
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(POSTED_AT));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** The Forge's two gates, as `the-forge.yaml` writes them. */
+    function forgeGatesDefinition() {
+      activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+        baseDefinition(
+          {
+            ANALYZE: {
+              kind: "Agent",
+              agent: "requirements-analyst",
+              input: "{{input.task}}",
+              transitions: [
+                {
+                  condition: "on_success",
+                  target: "AWAIT_REQUIREMENTS_APPROVAL",
+                },
+              ],
+            },
+            AWAIT_REQUIREMENTS_APPROVAL: {
+              kind: "Human",
+              timeout: "3600s",
+              prompt: "# The Forge: approve the requirements",
+              transitions: [
+                { condition: "input_equals_yes", target: "ARCHITECT" },
+                {
+                  condition: "input_equals_no",
+                  target: "ANALYZE",
+                  feedback: "{{human.feedback}}",
+                },
+              ],
+            },
+            ARCHITECT: {
+              kind: "Agent",
+              agent: "architect-agent",
+              input: "{{input.task}}",
+              transitions: [
+                { condition: "on_success", target: "AWAIT_ARCH_APPROVAL" },
+              ],
+            },
+            AWAIT_ARCH_APPROVAL: {
+              kind: "Human",
+              timeout: "3600s",
+              prompt: "# The Forge: approve the design",
+              transitions: [
+                { condition: "input_equals_yes", target: "DONE" },
+                {
+                  condition: "input_equals_no",
+                  target: "ARCHITECT",
+                  feedback: "{{human.feedback}}",
+                },
+              ],
+            },
+            DONE: { kind: "System", command: "true", transitions: [] },
+          },
+          "ANALYZE",
+        ),
+      );
+      activityMocks.executeSystemCommandActivity.mockResolvedValue({
+        status: "success",
+        exit_code: 0,
+        stdout: "",
+        stderr: "",
+      });
+    }
+
+    it("posts each of the Forge's two gates with its state name, responses yes and no, and a deadline one timeout after the post", async () => {
+      forgeGatesDefinition();
+      signals.push(["yes"], ["yes"]);
+
+      const result = await aegis_workflow({
+        workflow_id: "wf-1",
+        input: { task: "name the judge" },
+      });
+
+      expect(result.status).toBe("completed");
+      const gates = humanInputRequested();
+      expect(gates).toHaveLength(2);
+      expect(
+        gates.map(({ state_name, responses, expires_at }) => ({
+          state_name,
+          responses,
+          expires_at,
+        })),
+      ).toEqual([
+        {
+          state_name: "AWAIT_REQUIREMENTS_APPROVAL",
+          responses: ["yes", "no"],
+          expires_at: EXPIRES_AT,
+        },
+        {
+          state_name: "AWAIT_ARCH_APPROVAL",
+          responses: ["yes", "no"],
+          expires_at: EXPIRES_AT,
+        },
+      ]);
+      for (const gate of gates) {
+        expect(Date.parse(gate.expires_at) - Date.parse(gate.timestamp)).toBe(
+          3600 * 1000,
+        );
+      }
+    });
+
+    it("re-posts a gate after a refused word with its state name, its words and its first post's deadline", async () => {
+      gateDefinition("{{input.task}}");
+      // Ten minutes pass before the refused word, and ten more before the
+      // answer: the gate's deadline stays one timeout after its first post.
+      const deliver = vi.mocked(condition).getMockImplementation()!;
+      vi.mocked(condition).mockImplementation((async (
+        predicate: () => boolean,
+        timeout?: number | string,
+      ) => {
+        vi.setSystemTime(Date.now() + 10 * 60 * 1000);
+        return deliver(predicate, timeout as number);
+      }) as typeof condition);
+      signals.push(["approved"], ["yes"]);
+
+      const result = await aegis_workflow({
+        workflow_id: "wf-1",
+        input: { task: "name the judge" },
+      });
+
+      expect(result.status).toBe("completed");
+      const gates = humanInputRequested();
+      expect(gates).toHaveLength(2);
+      expect(gates[1].prompt).toMatch(
+        /^"approved" is not an answer this gate takes; answer yes or no\./,
+      );
+      for (const gate of gates) {
+        expect(gate.state_name).toBe("APPROVE");
+        expect(gate.responses).toEqual(["yes", "no"]);
+        expect(gate.expires_at).toBe(EXPIRES_AT);
+      }
+    });
+
+    it("posts a gate with no word transitions with responses []", async () => {
+      activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+        baseDefinition(
+          {
+            NOTE: {
+              kind: "Human",
+              timeout: "600s",
+              prompt: "Anything to add?",
+              transitions: [{ condition: "always", target: "DONE" }],
+            },
+            DONE: { kind: "System", command: "true", transitions: [] },
+          },
+          "NOTE",
+        ),
+      );
+      activityMocks.executeSystemCommandActivity.mockResolvedValue({
+        status: "success",
+        exit_code: 0,
+        stdout: "",
+        stderr: "",
+      });
+      signals.push(["ship it on Friday"]);
+
+      const result = await aegis_workflow({ workflow_id: "wf-1", input: {} });
+
+      expect(result.status).toBe("completed");
+      const gates = humanInputRequested();
+      expect(gates).toHaveLength(1);
+      expect(gates[0].state_name).toBe("NOTE");
+      expect(gates[0].responses).toEqual([]);
+      expect(gates[0].expires_at).toBe("2026-10-13T02:50:00.000Z");
+    });
   });
 });
 
