@@ -2,28 +2,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemporalWorkflowDefinition } from "../types.js";
 
 const { activityMocks, terminalActivityMocks, executeAgentRpcMock } =
-  vi.hoisted(() => ({
-    activityMocks: {
-      executeAgentActivity: vi.fn(),
-      executeSystemCommandActivity: vi.fn(),
-      validateOutputActivity: vi.fn(),
-      executeParallelAgentsActivity: vi.fn(),
-      storeTrajectoryPatternActivity: vi.fn(),
-      fetchWorkflowDefinition: vi.fn(),
-      publishEventActivity: vi.fn(),
-      executeContainerRunActivity: vi.fn(),
-      executeParallelContainerRunActivity: vi.fn(),
-      executeOutputHandlerActivity: vi.fn(),
-      runRepositoryActionActivity: vi.fn(),
-      runImageGenerateActivity: vi.fn(),
-      createEphemeralWorkspaceActivity: vi.fn(),
-      destroyWorkspaceVolumeActivity: vi.fn(),
-    },
-    terminalActivityMocks: {
-      executeAgentActivity: vi.fn(),
-    },
-    executeAgentRpcMock: vi.fn(),
-  }));
+  vi.hoisted(() => {
+    // A panel's activity has one attempt; it is the same mock either way.
+    const executeParallelAgentsActivity = vi.fn();
+    return {
+      activityMocks: {
+        executeAgentActivity: vi.fn(),
+        executeSystemCommandActivity: vi.fn(),
+        validateOutputActivity: vi.fn(),
+        executeParallelAgentsActivity,
+        storeTrajectoryPatternActivity: vi.fn(),
+        fetchWorkflowDefinition: vi.fn(),
+        publishEventActivity: vi.fn(),
+        executeContainerRunActivity: vi.fn(),
+        executeParallelContainerRunActivity: vi.fn(),
+        executeOutputHandlerActivity: vi.fn(),
+        runRepositoryActionActivity: vi.fn(),
+        runImageGenerateActivity: vi.fn(),
+        createEphemeralWorkspaceActivity: vi.fn(),
+        destroyWorkspaceVolumeActivity: vi.fn(),
+      },
+      terminalActivityMocks: {
+        executeAgentActivity: vi.fn(),
+        executeParallelAgentsActivity,
+      },
+      executeAgentRpcMock: vi.fn(),
+    };
+  });
 
 /** The agent's run limit as the workflow reads it; 1,800 s unless a test says otherwise. */
 const { agentRunLimitSecondsMock } = vi.hoisted(() => ({
@@ -2776,6 +2781,110 @@ describe("an Agent state's activity limit follows its agent's run limit", () => 
       retry: { maximumAttempts: 1 },
     });
     expect(terminalActivityMocks.executeAgentActivity).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The Forge's AUDIT: a panel of judges whose own run limits exceed ten minutes
+// must not be cut off at ten minutes and re-run as a fresh panel.
+describe("a ParallelAgents state's activity limit follows its agents' run limits", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    vi.mocked(proxyActivities).mockClear();
+    agentRunLimitSecondsMock.mockClear();
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.executeSystemCommandActivity.mockResolvedValue({
+      exit_code: 0,
+      stdout: "",
+      stderr: "",
+    });
+    activityMocks.executeParallelAgentsActivity.mockResolvedValue({
+      consensus: {
+        score: 0.99,
+        confidence: 0.95,
+        strategy: "weighted_average",
+      },
+    });
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue({
+      ...baseDefinition(
+        {
+          AUDIT: {
+            kind: "ParallelAgents",
+            agents: [
+              { agent: "code-reviewer-agent", input: "{}", weight: 1.0 },
+              { agent: "security-auditor-agent", input: "{}", weight: 2.0 },
+            ],
+            consensus: { strategy: "weighted_average", threshold: 0.95 },
+            transitions: [
+              { condition: "score_above", threshold: 0.95, target: "DONE" },
+            ],
+          },
+          DONE: { kind: "System", command: "echo done", transitions: [] },
+        },
+        "AUDIT",
+      ),
+      tenant_id: "tenant-a",
+    });
+    agentRunLimitSecondsMock
+      .mockResolvedValueOnce(900)
+      .mockResolvedValueOnce(600);
+  });
+
+  /** The options of every activity proxy the run itself built. */
+  function proxiesBuiltByTheRun() {
+    return vi.mocked(proxyActivities).mock.calls.map((call) => call[0]);
+  }
+
+  it("gives a panel whose longest agent limit is 900 s an activity of 960 seconds with a heartbeat timeout, and each agent its own limit", async () => {
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {},
+      blackboard: { tenant_id: "tenant-a" },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(proxiesBuiltByTheRun()).toEqual([
+      expect.objectContaining({
+        startToCloseTimeout: "960 seconds",
+        heartbeatTimeout: "2 minutes",
+      }),
+    ]);
+    expect(agentRunLimitSecondsMock).toHaveBeenCalledWith({
+      agentId: "code-reviewer-agent",
+      tenantId: "tenant-a",
+    });
+    expect(agentRunLimitSecondsMock).toHaveBeenCalledWith({
+      agentId: "security-auditor-agent",
+      tenantId: "tenant-a",
+    });
+    expect(
+      activityMocks.executeParallelAgentsActivity.mock.calls[0][0].agents,
+    ).toEqual([
+      expect.objectContaining({
+        agent: "code-reviewer-agent",
+        timeoutSeconds: 900,
+      }),
+      expect.objectContaining({
+        agent: "security-auditor-agent",
+        timeoutSeconds: 600,
+      }),
+    ]);
+  });
+
+  it("does not retry the panel's activity, so a timed-out panel is never run again as a fresh one", async () => {
+    await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {},
+      blackboard: { tenant_id: "tenant-a" },
+    });
+
+    expect(proxiesBuiltByTheRun()).toEqual([
+      expect.objectContaining({ retry: { maximumAttempts: 1 } }),
+    ]);
+    expect(activityMocks.executeParallelAgentsActivity).toHaveBeenCalledTimes(
+      1,
+    );
   });
 });
 

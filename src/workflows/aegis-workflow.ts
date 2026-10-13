@@ -80,10 +80,25 @@ function agentRunActivity(limitSeconds: number, terminal: boolean) {
   }).executeAgentActivity;
 }
 
+/**
+ * The activity that runs a ParallelAgents panel once: its limit is the longest
+ * of its agents' run limits plus the same margin, it heartbeats while the
+ * panel runs, and it has one attempt. A panel has no re-attach guard, so a
+ * retry would start a second panel while the first one's agents run on.
+ */
+function parallelAgentsActivity(limitSeconds: number) {
+  return proxyActivities<typeof activities>({
+    startToCloseTimeout: `${limitSeconds + AGENT_RUN_LIMIT_MARGIN_SECONDS} seconds`,
+    heartbeatTimeout: AGENT_RUN_HEARTBEAT_TIMEOUT,
+    retry: {
+      maximumAttempts: 1,
+    },
+  }).executeParallelAgentsActivity;
+}
+
 const {
   executeSystemCommandActivity,
   validateOutputActivity,
-  executeParallelAgentsActivity,
   storeTrajectoryPatternActivity,
   fetchWorkflowDefinition,
   publishEventActivity,
@@ -1150,12 +1165,30 @@ async function executeState(
     case "ParallelAgents": {
       if (!state.agents || !state.consensus)
         throw new Error("Invalid ParallelAgents State");
-      const agentConfigs = state.agents.map((a) => ({
-        agent: renderTemplate(a.agent, blackboard),
-        input: renderTemplate(a.input, blackboard),
-        weight: a.weight,
-      }));
-      let parallelResult = await executeParallelAgentsActivity({
+      // Each agent runs to its own run limit; the panel's activity follows
+      // the longest of them.
+      const agentConfigs: Array<{
+        agent: string;
+        input: string;
+        weight?: number;
+        timeoutSeconds: number;
+      }> = [];
+      for (const a of state.agents) {
+        const agent = renderTemplate(a.agent, blackboard);
+        agentConfigs.push({
+          agent,
+          input: renderTemplate(a.input, blackboard),
+          weight: a.weight,
+          timeoutSeconds: await agentRunLimitSecondsActivity({
+            agentId: agent,
+            tenantId: blackboard.tenant_id as string | undefined,
+          }),
+        });
+      }
+      const panelLimitSeconds = Math.max(
+        ...agentConfigs.map((a) => a.timeoutSeconds),
+      );
+      let parallelResult = await parallelAgentsActivity(panelLimitSeconds)({
         agents: agentConfigs,
         judges: state.judges_for_parallel,
         consensus: {

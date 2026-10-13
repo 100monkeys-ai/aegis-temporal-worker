@@ -977,10 +977,18 @@ function consensusOfAgentVerdicts(
 }
 
 /**
- * Execute multiple agents in parallel
+ * Execute multiple agents in parallel. Each agent runs to its own run limit
+ * (`timeoutSeconds`, read by the workflow), and the activity heartbeats while
+ * the panel runs.
  */
 export async function executeParallelAgentsActivity(params: {
-  agents: Array<{ agent: string; input: string; weight?: number }>;
+  agents: Array<{
+    agent: string;
+    input: string;
+    weight?: number;
+    /** The agent's own run limit in seconds. */
+    timeoutSeconds: number;
+  }>;
   /** External judge agents from the state's `judges_for_parallel` field (ADR-016). */
   judges?: Array<{
     agent_id: string;
@@ -999,6 +1007,11 @@ export async function executeParallelAgentsActivity(params: {
     "Executing parallel agents",
   );
 
+  const activity = currentActivityContext();
+  const heartbeats = activity
+    ? setInterval(() => activity.heartbeat(), AGENT_RUN_HEARTBEAT_INTERVAL_MS)
+    : undefined;
+
   try {
     // Execute all agents in parallel
     const results = await Promise.all(
@@ -1011,7 +1024,7 @@ export async function executeParallelAgentsActivity(params: {
           agent_id: resolvedAgent,
           input: agentConfig.input,
           context_json: JSON.stringify({ input: agentConfig.input }),
-          timeout_seconds: 600,
+          timeout_seconds: agentConfig.timeoutSeconds,
           security_context_name: params.securityContextName,
           tenant_id: params.tenantId,
         });
@@ -1074,6 +1087,8 @@ export async function executeParallelAgentsActivity(params: {
   } catch (error) {
     logger.error({ error }, "Parallel agents activity failed");
     throw error;
+  } finally {
+    if (heartbeats) clearInterval(heartbeats);
   }
 }
 

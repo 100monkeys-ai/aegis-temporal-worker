@@ -517,6 +517,95 @@ describe("ParallelAgents consensus without judges_for_parallel", () => {
   });
 });
 
+describe("a ParallelAgents panel runs each agent to its own limit, heartbeating", () => {
+  const AGENT_A = "123e4567-e89b-12d3-a456-426614174011";
+  const AGENT_B = "123e4567-e89b-12d3-a456-426614174012";
+
+  beforeEach(() => {
+    executeAgentMock.mockReset();
+    activityContext.current = undefined;
+  });
+
+  function completed(score: number) {
+    return [
+      {
+        event_type: "ExecutionCompleted",
+        execution_id: "child",
+        timestamp: "2026-10-13T20:01:53Z",
+        final_output: `{"score": ${score}, "confidence": 0.9}`,
+        total_iterations: 1,
+      },
+    ];
+  }
+
+  it("asks the orchestrator to run each agent with its own timeout_seconds", async () => {
+    executeAgentMock
+      .mockResolvedValueOnce(completed(1.0))
+      .mockResolvedValueOnce(completed(0.99));
+
+    await executeParallelAgentsActivity({
+      agents: [
+        { agent: AGENT_A, input: "{}", weight: 1.0, timeoutSeconds: 900 },
+        { agent: AGENT_B, input: "{}", weight: 2.0, timeoutSeconds: 1200 },
+      ],
+      consensus: { strategy: "weighted_average", threshold: 0.95 },
+    });
+
+    const sent = executeAgentMock.mock.calls.map((call) => [
+      call[0].agent_id,
+      call[0].timeout_seconds,
+    ]);
+    expect(sent).toEqual([
+      [AGENT_A, 900],
+      [AGENT_B, 1200],
+    ]);
+  });
+
+  it("heartbeats while the panel runs and stops once it ends", async () => {
+    vi.useFakeTimers();
+    try {
+      const heartbeat = vi.fn();
+      activityContext.current = {
+        info: { heartbeatDetails: undefined, startToCloseTimeoutMs: 960_000 },
+        heartbeat,
+        cancellationSignal: new AbortController().signal,
+      };
+      let finish: (events: unknown) => void = () => {};
+      executeAgentMock
+        .mockReturnValueOnce(
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+        )
+        .mockResolvedValueOnce(completed(0.99));
+
+      const panel = executeParallelAgentsActivity({
+        agents: [
+          { agent: AGENT_A, input: "{}", weight: 1.0, timeoutSeconds: 900 },
+          { agent: AGENT_B, input: "{}", weight: 2.0, timeoutSeconds: 900 },
+        ],
+        consensus: { strategy: "weighted_average", threshold: 0.95 },
+      });
+
+      await vi.advanceTimersByTimeAsync(
+        3 * activitiesModule.AGENT_RUN_HEARTBEAT_INTERVAL_MS,
+      );
+      expect(heartbeat.mock.calls.length).toBeGreaterThanOrEqual(3);
+
+      finish(completed(1.0));
+      await panel;
+      const beatsAtEnd = heartbeat.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(
+        3 * activitiesModule.AGENT_RUN_HEARTBEAT_INTERVAL_MS,
+      );
+      expect(heartbeat.mock.calls.length).toBe(beatsAtEnd);
+    } finally {
+      vi.useRealTimers();
+      activityContext.current = undefined;
+    }
+  });
+});
+
 describe("an agent run starts once per step", () => {
   const AGENT = "123e4567-e89b-12d3-a456-426614174000";
   const fetchMock = vi.fn();
