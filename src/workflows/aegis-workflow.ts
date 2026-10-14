@@ -317,9 +317,10 @@ function namesRunRepository(volumeName: string): boolean {
 /**
  * The run's repository as the blackboard carries it: the first prepared
  * entry's label, its path inside a step's container, its work branch, the
- * binding's ref and the commit the work branch started from. A field the
- * entry does not carry is null. Nothing else of the entry is copied: no
- * binding, no author, no credential, no URL.
+ * binding's ref, the commit the work branch started from and the tracked
+ * test files the preparation listed. A field the entry does not carry is
+ * null. Nothing else of the entry is copied: no binding, no author, no
+ * credential, no URL.
  */
 function repositoryOnBlackboard(
   entry: RunRepositoryEntry,
@@ -333,6 +334,11 @@ function repositoryOnBlackboard(
     branch: text(entry.branch),
     ref: text(entry.ref),
     started_from: text(entry.started_from),
+    tests:
+      Array.isArray(entry.tests) &&
+      entry.tests.every((path) => typeof path === "string")
+        ? [...entry.tests]
+        : null,
   };
 }
 

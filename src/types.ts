@@ -658,6 +658,8 @@ export interface RunRepositoryEntry {
   label?: string;
   ref?: string;
   started_from?: string;
+  /** The repository's tracked test files, as the preparation listed them. */
+  tests?: string[];
   [key: string]: unknown;
 }
 
@@ -672,6 +674,8 @@ export interface BlackboardRepository {
   branch: string | null;
   ref: string | null;
   started_from: string | null;
+  /** The tracked test files, `{{repository.tests}}`; null when not listed. */
+  tests: string[] | null;
 }
 
 /**

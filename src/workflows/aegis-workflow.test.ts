@@ -3099,10 +3099,55 @@ describe("the run's repository on the blackboard", () => {
       branch: "aegis/run-exec-123",
       ref: "main",
       started_from: "352a61f3",
+      tests: null,
     });
     expect(activityMocks.executeAgentActivity.mock.calls[0][0].input).toBe(
       "read /workspace/aegis-examples on aegis/run-exec-123",
     );
+  });
+
+  it("copies the prepared entry's tracked test files as `repository.tests`", async () => {
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {},
+      repositories: [
+        {
+          binding_id: "0b5f1c9e-2a54-4f43-9c43-7d3f1d6e2a10",
+          branch: "aegis/run-exec-123",
+          label: "aegis-examples",
+          ref: "main",
+          started_from: "352a61f3",
+          tests: ["test/test_readme.py", "test/test_cli.py"],
+        },
+      ],
+    });
+
+    expect(result.blackboard?.repository).toEqual({
+      label: "aegis-examples",
+      path: "/workspace/aegis-examples",
+      branch: "aegis/run-exec-123",
+      ref: "main",
+      started_from: "352a61f3",
+      tests: ["test/test_readme.py", "test/test_cli.py"],
+    });
+  });
+
+  it("writes `repository.tests` as null when the prepared entry carries no `tests`", async () => {
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: {},
+      repositories: [
+        {
+          binding_id: "0b5f1c9e-2a54-4f43-9c43-7d3f1d6e2a10",
+          branch: "aegis/run-exec-123",
+          label: "aegis-examples",
+          ref: "main",
+          started_from: "352a61f3",
+        },
+      ],
+    });
+
+    expect(result.blackboard?.repository).toHaveProperty("tests", null);
   });
 
   it("writes nulls for the fields the entry does not carry", async () => {
@@ -3123,6 +3168,7 @@ describe("the run's repository on the blackboard", () => {
       branch: "aegis/run-exec-123",
       ref: null,
       started_from: null,
+      tests: null,
     });
   });
 
