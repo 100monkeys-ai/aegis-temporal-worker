@@ -75,10 +75,10 @@ jobs:
         run: |
           if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
             echo "🔍 DRY RUN: Would publish @100monkeys-ai/aegis-temporal-worker"
-            npm publish --dry-run
+            npm publish --dry-run --tag beta
           else
             echo "📦 Publishing @100monkeys-ai/aegis-temporal-worker to GitHub Packages..."
-            npm publish
+            npm publish --tag beta
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
