@@ -1,6 +1,6 @@
 {
   "name": "@100monkeys-ai/aegis-temporal-worker",
-  "version": "0.15.0-pre-alpha",
+  "version": "1.0.0-beta",
   "description": "AEGIS Temporal Worker - Dynamic workflow generation and execution",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
