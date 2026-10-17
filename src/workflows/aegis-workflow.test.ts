@@ -3918,6 +3918,19 @@ describe("an Action state runs the workflow's own operation", () => {
       { message: "carbon-forge: {{input.task}}" },
       "carbon-forge: name the judge",
     ],
+    [
+      "tree_cut",
+      "tree_cut",
+      { cut: "forge/{{input.task}}" },
+      "forge/name the judge",
+    ],
+    [
+      "archive_render",
+      "archive_render",
+      { cut: "forge/{{input.task}}" },
+      "forge/name the judge",
+    ],
+    ["archive_push", "archive_push", undefined, undefined],
   ])(
     "'%s' calls the repository action '%s' for the run, and never a system command",
     async (name, action, args, message) => {
@@ -3970,6 +3983,52 @@ describe("an Action state runs the workflow's own operation", () => {
       });
     },
   );
+
+  it("a CUT state's args.cut reaches RunRepositoryAction as the message, and the cut and its snapshot are the output", async () => {
+    activityMocks.runRepositoryActionActivity.mockResolvedValue({
+      commit_sha: "snap-0001",
+      branch: "",
+      ref: "release-2026-10-17",
+      diff: undefined,
+    });
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          CUT: {
+            kind: "Action",
+            action: "tree_cut",
+            args: { cut: "{{input.cut}}" },
+            transitions: [],
+          },
+        },
+        "CUT",
+      ),
+    );
+
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { cut: "release-2026-10-17" },
+      tenant_id: "tenant-a",
+    });
+
+    expect(activityMocks.runRepositoryActionActivity).toHaveBeenCalledWith({
+      workflow_execution_id: "exec-123",
+      action: "tree_cut",
+      message: "release-2026-10-17",
+      tenant_id: "tenant-a",
+    });
+    expect(result.status).toBe("completed");
+    expect(result.blackboard?.CUT).toEqual({
+      status: "success",
+      exit_code: 0,
+      output: {
+        commit_sha: "snap-0001",
+        branch: "",
+        ref: "release-2026-10-17",
+        diff: undefined,
+      },
+    });
+  });
 
   it("a repository answer's sentence fails the state with that sentence, and on_failure takes it", async () => {
     const sentence =
@@ -4046,7 +4105,7 @@ describe("an Action state runs the workflow's own operation", () => {
     expect(result.status).toBe("failed");
     expect(result.final_state).toBe("STEP");
     expect(result.error).toBe(
-      "unknown action 'repository_push'; the actions are update_blackboard, repository_diff, repository_commit, repository_land, tree_diff, tree_write, tree_land, image_generate",
+      "unknown action 'repository_push'; the actions are update_blackboard, repository_diff, repository_commit, repository_land, tree_diff, tree_write, tree_land, tree_cut, archive_render, archive_push, image_generate",
     );
     expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
     expect(activityMocks.runRepositoryActionActivity).not.toHaveBeenCalled();
@@ -4265,6 +4324,9 @@ describe("a System state written as an action is refused", () => {
     "tree_diff",
     "tree_write",
     "tree_land",
+    "tree_cut",
+    "archive_render",
+    "archive_push",
     "image_generate",
   ];
 

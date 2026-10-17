@@ -1094,9 +1094,13 @@ describe("runRepositoryActionActivity", () => {
 
   // Carbon-forge's tree actions (AEGIS ADR-147): `tree_write` carries the
   // change's message and `tree_land` the lane's intent; `tree_diff` takes none.
+  // The deploy actions (AEGIS ADR-149): `tree_cut` and `archive_render` carry
+  // the cut's name as the message; `archive_push` takes none.
   it.each([
     ["tree_write", "carbon-forge: name the judge"],
     ["tree_land", "carbon-forge: name the judge"],
+    ["tree_cut", "forge/pilot"],
+    ["archive_render", "forge/pilot"],
   ] as const)(
     "sends the message with '%s', in the run's tenant",
     async (action, message) => {
@@ -1134,6 +1138,25 @@ describe("runRepositoryActionActivity", () => {
 
     expect(runRepositoryActionMock).toHaveBeenCalledWith(
       { workflow_execution_id: "exec-1", action: "tree_diff" },
+      undefined,
+    );
+  });
+
+  it("sends no message for an archive push", async () => {
+    runRepositoryActionMock.mockResolvedValue({
+      commit_sha: "abc1234",
+      branch: "main",
+      ref: "nn/forge/pilot",
+    });
+
+    await activitiesModule.runRepositoryActionActivity({
+      workflow_execution_id: "exec-1",
+      action: "archive_push",
+      message: "ignored",
+    });
+
+    expect(runRepositoryActionMock).toHaveBeenCalledWith(
+      { workflow_execution_id: "exec-1", action: "archive_push" },
       undefined,
     );
   });
