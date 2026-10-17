@@ -2784,6 +2784,66 @@ describe("an Agent state's activity limit follows its agent's run limit", () => 
   });
 });
 
+// carbon-deploy's WAIT (AEGIS ADR-149): the orchestrator waits up to the
+// wait's timeout_seconds for the deploy run, longer than the ten minutes of
+// the other repository actions, so the WAIT call's activity is given that
+// timeout plus a margin.
+describe("an archive_deploy_wait state's activity limit follows the wait's timeout", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(activityMocks)) {
+      fn.mockReset();
+    }
+    vi.mocked(proxyActivities).mockClear();
+    activityMocks.publishEventActivity.mockResolvedValue(undefined);
+    activityMocks.runRepositoryActionActivity.mockResolvedValue({
+      commit_sha: "39100000001",
+      branch: "success",
+      ref: "https://github.com/acme/site/actions/runs/39100000001",
+    });
+  });
+
+  it.each([
+    [
+      "a JSON message of timeout_seconds 2400",
+      "2520 seconds",
+      { message: '{"cut": "forge-pilot", "timeout_seconds": 2400}' },
+    ],
+    ["a bare cut name", "1920 seconds", { cut: "forge-pilot" }],
+  ])(
+    "gives a WAIT state with %s an activity of %s",
+    async (_form, startToClose, args) => {
+      activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+        baseDefinition(
+          {
+            WAIT: {
+              kind: "Action",
+              action: "archive_deploy_wait",
+              args,
+              transitions: [],
+            },
+          },
+          "WAIT",
+        ),
+      );
+
+      const result = await aegis_workflow({
+        workflow_id: "wf-1",
+        input: {},
+        tenant_id: "tenant-a",
+      });
+
+      expect(result.status).toBe("completed");
+      expect(proxyActivities).toHaveBeenCalledWith({
+        startToCloseTimeout: startToClose,
+        retry: { maximumAttempts: 3 },
+      });
+      expect(activityMocks.runRepositoryActionActivity).toHaveBeenCalledTimes(
+        1,
+      );
+    },
+  );
+});
+
 // The Forge's AUDIT: a panel of judges whose own run limits exceed ten minutes
 // must not be cut off at ten minutes and re-run as a fresh panel.
 describe("a ParallelAgents state's activity limit follows its agents' run limits", () => {
@@ -3931,6 +3991,21 @@ describe("an Action state runs the workflow's own operation", () => {
       "forge/name the judge",
     ],
     ["archive_push", "archive_push", undefined, undefined],
+    [
+      "archive_deploy_wait",
+      "archive_deploy_wait",
+      { cut: "forge/{{input.task}}" },
+      "forge/name the judge",
+    ],
+    [
+      "archive_deploy_wait",
+      "archive_deploy_wait",
+      {
+        message:
+          '{"cut": "forge-pilot", "timeout_seconds": 2400, "no_run_grace_seconds": 600}',
+      },
+      '{"cut": "forge-pilot", "timeout_seconds": 2400, "no_run_grace_seconds": 600}',
+    ],
   ])(
     "'%s' calls the repository action '%s' for the run, and never a system command",
     async (name, action, args, message) => {
@@ -4105,7 +4180,7 @@ describe("an Action state runs the workflow's own operation", () => {
     expect(result.status).toBe("failed");
     expect(result.final_state).toBe("STEP");
     expect(result.error).toBe(
-      "unknown action 'repository_push'; the actions are update_blackboard, repository_diff, repository_commit, repository_land, tree_diff, tree_write, tree_land, tree_cut, archive_render, archive_push, image_generate",
+      "unknown action 'repository_push'; the actions are update_blackboard, repository_diff, repository_commit, repository_land, tree_diff, tree_write, tree_land, tree_cut, archive_render, archive_push, archive_deploy_wait, image_generate",
     );
     expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
     expect(activityMocks.runRepositoryActionActivity).not.toHaveBeenCalled();

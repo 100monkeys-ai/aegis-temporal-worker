@@ -1095,12 +1095,19 @@ describe("runRepositoryActionActivity", () => {
   // Carbon-forge's tree actions (AEGIS ADR-147): `tree_write` carries the
   // change's message and `tree_land` the lane's intent; `tree_diff` takes none.
   // The deploy actions (AEGIS ADR-149): `tree_cut` and `archive_render` carry
-  // the cut's name as the message; `archive_push` takes none.
+  // the cut's name as the message; `archive_push` takes none;
+  // `archive_deploy_wait` carries its message unchanged, a bare cut name or a
+  // JSON object the orchestrator parses.
   it.each([
     ["tree_write", "carbon-forge: name the judge"],
     ["tree_land", "carbon-forge: name the judge"],
     ["tree_cut", "forge/pilot"],
     ["archive_render", "forge/pilot"],
+    ["archive_deploy_wait", "forge-pilot"],
+    [
+      "archive_deploy_wait",
+      '{"cut": "forge-pilot", "timeout_seconds": 2400, "no_run_grace_seconds": 600}',
+    ],
   ] as const)(
     "sends the message with '%s', in the run's tenant",
     async (action, message) => {
