@@ -1092,6 +1092,52 @@ describe("runRepositoryActionActivity", () => {
     );
   });
 
+  // Carbon-forge's tree actions (AEGIS ADR-147): `tree_write` carries the
+  // change's message and `tree_land` the lane's intent; `tree_diff` takes none.
+  it.each([
+    ["tree_write", "carbon-forge: name the judge"],
+    ["tree_land", "carbon-forge: name the judge"],
+  ] as const)(
+    "sends the message with '%s', in the run's tenant",
+    async (action, message) => {
+      runRepositoryActionMock.mockResolvedValue({
+        branch: "aegis/run-exec-1",
+        ref: "main",
+      });
+
+      await activitiesModule.runRepositoryActionActivity({
+        workflow_execution_id: "exec-1",
+        action,
+        message,
+        tenant_id: "tenant-a",
+      });
+
+      expect(runRepositoryActionMock).toHaveBeenCalledWith(
+        { workflow_execution_id: "exec-1", action, message },
+        "tenant-a",
+      );
+    },
+  );
+
+  it("sends no message for a tree diff", async () => {
+    runRepositoryActionMock.mockResolvedValue({
+      branch: "aegis/run-exec-1",
+      ref: "main",
+      diff: "+x",
+    });
+
+    await activitiesModule.runRepositoryActionActivity({
+      workflow_execution_id: "exec-1",
+      action: "tree_diff",
+      message: "ignored",
+    });
+
+    expect(runRepositoryActionMock).toHaveBeenCalledWith(
+      { workflow_execution_id: "exec-1", action: "tree_diff" },
+      undefined,
+    );
+  });
+
   it("answers the refusal's sentence, and no empty field as a value", async () => {
     runRepositoryActionMock.mockResolvedValue({
       commit_sha: "",

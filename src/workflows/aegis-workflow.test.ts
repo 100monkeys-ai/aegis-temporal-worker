@@ -3905,6 +3905,19 @@ describe("an Action state runs the workflow's own operation", () => {
       "the-forge: name the judge",
     ],
     ["repository_land", "land", undefined, undefined],
+    ["tree_diff", "tree_diff", undefined, undefined],
+    [
+      "tree_write",
+      "tree_write",
+      { message: "carbon-forge: {{input.task}}" },
+      "carbon-forge: name the judge",
+    ],
+    [
+      "tree_land",
+      "tree_land",
+      { message: "carbon-forge: {{input.task}}" },
+      "carbon-forge: name the judge",
+    ],
   ])(
     "'%s' calls the repository action '%s' for the run, and never a system command",
     async (name, action, args, message) => {
@@ -4033,7 +4046,7 @@ describe("an Action state runs the workflow's own operation", () => {
     expect(result.status).toBe("failed");
     expect(result.final_state).toBe("STEP");
     expect(result.error).toBe(
-      "unknown action 'repository_push'; the actions are update_blackboard, repository_diff, repository_commit, repository_land, image_generate",
+      "unknown action 'repository_push'; the actions are update_blackboard, repository_diff, repository_commit, repository_land, tree_diff, tree_write, tree_land, image_generate",
     );
     expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
     expect(activityMocks.runRepositoryActionActivity).not.toHaveBeenCalled();
@@ -4249,6 +4262,9 @@ describe("a System state written as an action is refused", () => {
     "repository_diff",
     "repository_commit",
     "repository_land",
+    "tree_diff",
+    "tree_write",
+    "tree_land",
     "image_generate",
   ];
 
