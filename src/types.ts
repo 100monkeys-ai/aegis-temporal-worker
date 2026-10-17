@@ -585,7 +585,8 @@ export type RepositoryAction =
   | "tree_land"
   | "tree_cut"
   | "archive_render"
-  | "archive_push";
+  | "archive_push"
+  | "archive_deploy_wait";
 
 /**
  * gRPC request for RunRepositoryAction. Maps directly to proto
@@ -596,9 +597,13 @@ export interface RunRepositoryActionRequest {
   action: RepositoryAction;
   /**
    * The message: `commit`'s commit message, `tree_write`'s change message,
-   * `tree_land`'s intent for the landing, and `tree_cut`'s and
-   * `archive_render`'s cut name; absent for the other actions, `archive_push`
-   * among them.
+   * `tree_land`'s intent for the landing, `tree_cut`'s and `archive_render`'s
+   * cut name, and `archive_deploy_wait`'s arguments in one of two forms: a
+   * bare cut name (the defaults timeout_seconds 1800 and
+   * no_run_grace_seconds 300), or, when its first character is `{`, a JSON
+   * object `{"cut": ..., "timeout_seconds": ..., "no_run_grace_seconds": ...}`
+   * with `cut` required, parsed by the orchestrator; absent for the other
+   * actions, `archive_push` among them.
    */
   message?: string;
 }

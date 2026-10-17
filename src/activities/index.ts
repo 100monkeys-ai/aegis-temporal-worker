@@ -659,7 +659,9 @@ export async function executeSystemCommandActivity(params: {
  * run holds, or `tree_diff`, `tree_write` (with its message) or `tree_land`
  * (with its message, the lane's intent) on the Nuclear Notes tree a
  * carbon-forge run holds (AEGIS ADR-147), or `tree_cut` and `archive_render`
- * (with the cut's name as the message) or `archive_push` (AEGIS ADR-149). A
+ * (with the cut's name as the message), `archive_push`, or
+ * `archive_deploy_wait` (with its message passed through unchanged, a cut
+ * name or the JSON object the orchestrator parses) (AEGIS ADR-149). A
  * refusal is answered, not thrown:
  * its `sentence` is the orchestrator's, and the workflow fails the state with
  * it.
@@ -683,14 +685,16 @@ export async function runRepositoryActionActivity(params: {
     action: params.action,
   };
   // The request's one argument field: the commit message, tree_write's change
-  // message, tree_land's intent, and tree_cut's and archive_render's cut name
-  // (AEGIS ADR-149); archive_push and the diffs send none.
+  // message, tree_land's intent, tree_cut's and archive_render's cut name,
+  // and archive_deploy_wait's message unchanged, never parsed here (AEGIS
+  // ADR-149); archive_push and the diffs send none.
   if (
     (params.action === "commit" ||
       params.action === "tree_write" ||
       params.action === "tree_land" ||
       params.action === "tree_cut" ||
-      params.action === "archive_render") &&
+      params.action === "archive_render" ||
+      params.action === "archive_deploy_wait") &&
     params.message !== undefined
   ) {
     request.message = params.message;

@@ -80,6 +80,55 @@ function agentRunActivity(limitSeconds: number, terminal: boolean) {
   }).executeAgentActivity;
 }
 
+/** The orchestrator's wait for a deploy run when the message names none. */
+const DEPLOY_WAIT_TIMEOUT_SECONDS = 1800;
+
+/** The time the deploy wait's activity is given beyond the wait's own timeout. */
+const DEPLOY_WAIT_MARGIN_SECONDS = 120;
+
+/**
+ * The wait's timeout_seconds as the orchestrator reads it from the message: a
+ * message whose first character is `{` is a JSON object that may name it;
+ * any other message is a bare cut name with the default. A message the
+ * orchestrator would refuse gets the default here; its refusal is the
+ * orchestrator's.
+ */
+function deployWaitTimeoutSeconds(message: string | undefined): number {
+  if (message?.startsWith("{")) {
+    try {
+      const seconds = (JSON.parse(message) as { timeout_seconds?: unknown })
+        ?.timeout_seconds;
+      if (
+        typeof seconds === "number" &&
+        Number.isInteger(seconds) &&
+        seconds >= 0
+      ) {
+        return seconds;
+      }
+    } catch {
+      // Not JSON: the orchestrator refuses it with its own sentence.
+    }
+  }
+  return DEPLOY_WAIT_TIMEOUT_SECONDS;
+}
+
+/**
+ * The activity that runs carbon-deploy's WAIT (archive_deploy_wait, AEGIS
+ * ADR-149): the orchestrator answers once the deploy run concluded, or at the
+ * wait's timeout, so its limit is that timeout plus a margin rather than the
+ * ten minutes of the other repository actions. The call is one gRPC round
+ * trip, with no heartbeat; the wait touches nothing, so a retry only waits
+ * again.
+ */
+function deployWaitActivity(timeoutSeconds: number) {
+  return proxyActivities<typeof activities>({
+    startToCloseTimeout: `${timeoutSeconds + DEPLOY_WAIT_MARGIN_SECONDS} seconds`,
+    retry: {
+      maximumAttempts: 3,
+    },
+  }).runRepositoryActionActivity;
+}
+
 /**
  * The activity that runs a ParallelAgents panel once: its limit is the longest
  * of its agents' run limits plus the same margin, it heartbeats while the
@@ -176,8 +225,9 @@ const RESERVED_BLACKBOARD_KEYS: ReadonlySet<string> = new Set([
  * `tree_*` actions (AEGIS ADR-147) the Nuclear Notes tree, written to a lane
  * of the run's own and landed as one changeset; carbon-forge's `tree_cut`
  * names the landed state as a cut, and carbon-deploy's `archive_render` and
- * `archive_push` render that cut to the git archive and push it (AEGIS
- * ADR-149). Their image sibling is
+ * `archive_push` render that cut to the git archive and push it, and
+ * `archive_deploy_wait` waits for the deploy run the push starts on the
+ * remote (AEGIS ADR-149). Their image sibling is
  * `image_generate` (IMAGE_ACTION), which the orchestrator runs through
  * RunImageGenerate into the run's volume.
  */
@@ -191,6 +241,7 @@ const REPOSITORY_ACTIONS: Readonly<Record<string, RepositoryAction>> = {
   tree_cut: "tree_cut",
   archive_render: "archive_render",
   archive_push: "archive_push",
+  archive_deploy_wait: "archive_deploy_wait",
 };
 
 /**
@@ -216,6 +267,7 @@ const ACTIONS = [
   "tree_cut",
   "archive_render",
   "archive_push",
+  "archive_deploy_wait",
   IMAGE_ACTION,
 ] as const;
 
@@ -247,7 +299,8 @@ function writeBlackboard(
  * Runs a repository action on the repository the run holds, through the
  * orchestrator's RunRepositoryAction. The answer's fields are the state's
  * output; an answer's sentence fails the state with that sentence, so its
- * on_failure transition takes it.
+ * on_failure transition takes it. archive_deploy_wait runs under its own
+ * limit, the wait's timeout plus a margin.
  */
 async function runRepositoryStep(
   action: RepositoryAction,
@@ -255,20 +308,26 @@ async function runRepositoryStep(
   executionId: string,
   blackboard: Blackboard,
 ): Promise<any> {
-  const answer = await runRepositoryActionActivity({
+  const runAction =
+    action === "archive_deploy_wait"
+      ? deployWaitActivity(deployWaitTimeoutSeconds(message))
+      : runRepositoryActionActivity;
+  const answer = await runAction({
     workflow_execution_id: executionId,
     action,
     // The request's one argument field: commit's commit message, tree_write's
     // change message, tree_land's intent for the lane's landing (each the
-    // state's args.message), and tree_cut's and archive_render's cut name
-    // (the state's args.cut, else its args.message); archive_push and the
-    // diffs take none.
+    // state's args.message), tree_cut's and archive_render's cut name, and
+    // archive_deploy_wait's bare cut name or JSON object of its arguments
+    // (each the state's args.cut, else its args.message); archive_push and
+    // the diffs take none.
     message:
       action === "commit" ||
       action === "tree_write" ||
       action === "tree_land" ||
       action === "tree_cut" ||
-      action === "archive_render"
+      action === "archive_render" ||
+      action === "archive_deploy_wait"
         ? message
         : undefined,
     tenant_id: (blackboard.tenant_id as string | undefined) || undefined,
@@ -1108,12 +1167,15 @@ async function executeState(
         return await runImageGenerateStep(args, executionId, blackboard);
       }
       // The message the request carries: a cut's name rides it for tree_cut
-      // and archive_render, read from args.cut and else args.message; the
-      // other actions read args.message.
+      // and archive_render, and archive_deploy_wait's cut name or JSON object,
+      // read from args.cut and else args.message; the other actions read
+      // args.message.
       const repositoryAction = REPOSITORY_ACTIONS[state.action];
       return await runRepositoryStep(
         repositoryAction,
-        repositoryAction === "tree_cut" || repositoryAction === "archive_render"
+        repositoryAction === "tree_cut" ||
+          repositoryAction === "archive_render" ||
+          repositoryAction === "archive_deploy_wait"
           ? (args.cut ?? args.message)
           : args.message,
         executionId,
