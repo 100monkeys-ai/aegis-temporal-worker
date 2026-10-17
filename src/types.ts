@@ -571,10 +571,21 @@ export interface ExecuteSystemCommandRequest {
  * One of the workflow interpreter's own repository steps, run through
  * RunRepositoryAction: `diff`, `commit` and `land` on the repository the
  * workflow run holds; `tree_diff`, `tree_write` and `tree_land` on the
- * Nuclear Notes tree a carbon-forge run holds (AEGIS ADR-147).
+ * Nuclear Notes tree a carbon-forge run holds (AEGIS ADR-147); `tree_cut`,
+ * which names the landed state as a cut, and `archive_render` and
+ * `archive_push`, which render a cut to the git archive and push it (AEGIS
+ * ADR-149).
  */
 export type RepositoryAction =
-  "diff" | "commit" | "land" | "tree_diff" | "tree_write" | "tree_land";
+  | "diff"
+  | "commit"
+  | "land"
+  | "tree_diff"
+  | "tree_write"
+  | "tree_land"
+  | "tree_cut"
+  | "archive_render"
+  | "archive_push";
 
 /**
  * gRPC request for RunRepositoryAction. Maps directly to proto
@@ -585,7 +596,9 @@ export interface RunRepositoryActionRequest {
   action: RepositoryAction;
   /**
    * The message: `commit`'s commit message, `tree_write`'s change message,
-   * `tree_land`'s intent for the landing; absent for the other actions.
+   * `tree_land`'s intent for the landing, and `tree_cut`'s and
+   * `archive_render`'s cut name; absent for the other actions, `archive_push`
+   * among them.
    */
   message?: string;
 }

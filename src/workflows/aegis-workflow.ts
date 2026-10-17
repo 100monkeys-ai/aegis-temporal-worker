@@ -174,7 +174,10 @@ const RESERVED_BLACKBOARD_KEYS: ReadonlySet<string> = new Set([
  * RepositoryAction the orchestrator runs on what the run holds: the
  * repository for the `repository_*` actions, and for carbon-forge's
  * `tree_*` actions (AEGIS ADR-147) the Nuclear Notes tree, written to a lane
- * of the run's own and landed as one changeset. Their image sibling is
+ * of the run's own and landed as one changeset; carbon-forge's `tree_cut`
+ * names the landed state as a cut, and carbon-deploy's `archive_render` and
+ * `archive_push` render that cut to the git archive and push it (AEGIS
+ * ADR-149). Their image sibling is
  * `image_generate` (IMAGE_ACTION), which the orchestrator runs through
  * RunImageGenerate into the run's volume.
  */
@@ -185,6 +188,9 @@ const REPOSITORY_ACTIONS: Readonly<Record<string, RepositoryAction>> = {
   tree_diff: "tree_diff",
   tree_write: "tree_write",
   tree_land: "tree_land",
+  tree_cut: "tree_cut",
+  archive_render: "archive_render",
+  archive_push: "archive_push",
 };
 
 /**
@@ -207,6 +213,9 @@ const ACTIONS = [
   "tree_diff",
   "tree_write",
   "tree_land",
+  "tree_cut",
+  "archive_render",
+  "archive_push",
   IMAGE_ACTION,
 ] as const;
 
@@ -249,11 +258,17 @@ async function runRepositoryStep(
   const answer = await runRepositoryActionActivity({
     workflow_execution_id: executionId,
     action,
-    // The state's args.message: commit's commit message, tree_write's change
-    // message, tree_land's intent for the lane's landing; no other action
-    // takes one.
+    // The request's one argument field: commit's commit message, tree_write's
+    // change message, tree_land's intent for the lane's landing (each the
+    // state's args.message), and tree_cut's and archive_render's cut name
+    // (the state's args.cut, else its args.message); archive_push and the
+    // diffs take none.
     message:
-      action === "commit" || action === "tree_write" || action === "tree_land"
+      action === "commit" ||
+      action === "tree_write" ||
+      action === "tree_land" ||
+      action === "tree_cut" ||
+      action === "archive_render"
         ? message
         : undefined,
     tenant_id: (blackboard.tenant_id as string | undefined) || undefined,
@@ -1092,9 +1107,15 @@ async function executeState(
       if (state.action === IMAGE_ACTION) {
         return await runImageGenerateStep(args, executionId, blackboard);
       }
+      // The message the request carries: a cut's name rides it for tree_cut
+      // and archive_render, read from args.cut and else args.message; the
+      // other actions read args.message.
+      const repositoryAction = REPOSITORY_ACTIONS[state.action];
       return await runRepositoryStep(
-        REPOSITORY_ACTIONS[state.action],
-        args.message,
+        repositoryAction,
+        repositoryAction === "tree_cut" || repositoryAction === "archive_render"
+          ? (args.cut ?? args.message)
+          : args.message,
         executionId,
         blackboard,
       );
