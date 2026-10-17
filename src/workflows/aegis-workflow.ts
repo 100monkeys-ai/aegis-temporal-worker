@@ -171,14 +171,20 @@ const RESERVED_BLACKBOARD_KEYS: ReadonlySet<string> = new Set([
 
 /**
  * The repository actions: each maps an `Action` state's action name to the
- * RepositoryAction the orchestrator runs on the repository the run holds.
- * Their image sibling is `image_generate` (IMAGE_ACTION), which the
- * orchestrator runs through RunImageGenerate into the run's volume.
+ * RepositoryAction the orchestrator runs on what the run holds: the
+ * repository for the `repository_*` actions, and for carbon-forge's
+ * `tree_*` actions (AEGIS ADR-147) the Nuclear Notes tree, written to a lane
+ * of the run's own and landed as one changeset. Their image sibling is
+ * `image_generate` (IMAGE_ACTION), which the orchestrator runs through
+ * RunImageGenerate into the run's volume.
  */
 const REPOSITORY_ACTIONS: Readonly<Record<string, RepositoryAction>> = {
   repository_diff: "diff",
   repository_commit: "commit",
   repository_land: "land",
+  tree_diff: "tree_diff",
+  tree_write: "tree_write",
+  tree_land: "tree_land",
 };
 
 /**
@@ -198,6 +204,9 @@ const ACTIONS = [
   "repository_diff",
   "repository_commit",
   "repository_land",
+  "tree_diff",
+  "tree_write",
+  "tree_land",
   IMAGE_ACTION,
 ] as const;
 
@@ -240,7 +249,13 @@ async function runRepositoryStep(
   const answer = await runRepositoryActionActivity({
     workflow_execution_id: executionId,
     action,
-    message: action === "commit" ? message : undefined,
+    // The state's args.message: commit's commit message, tree_write's change
+    // message, tree_land's intent for the lane's landing; no other action
+    // takes one.
+    message:
+      action === "commit" || action === "tree_write" || action === "tree_land"
+        ? message
+        : undefined,
     tenant_id: (blackboard.tenant_id as string | undefined) || undefined,
   });
   const output = {

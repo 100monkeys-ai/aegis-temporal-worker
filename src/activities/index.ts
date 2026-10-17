@@ -654,10 +654,13 @@ export async function executeSystemCommandActivity(params: {
 }
 
 /**
- * Run one of the workflow interpreter's repository steps on the repository the
- * workflow run holds (RunRepositoryAction): `diff`, `commit` (with its message)
- * or `land`. A refusal is answered, not thrown: its `sentence` is the
- * orchestrator's, and the workflow fails the state with it.
+ * Run one of the workflow interpreter's repository steps (RunRepositoryAction):
+ * `diff`, `commit` (with its message) or `land` on the repository the workflow
+ * run holds, or `tree_diff`, `tree_write` (with its message) or `tree_land`
+ * (with its message, the lane's intent) on the Nuclear Notes tree a
+ * carbon-forge run holds (AEGIS ADR-147). A refusal is answered, not thrown:
+ * its `sentence` is the orchestrator's, and the workflow fails the state with
+ * it.
  */
 export async function runRepositoryActionActivity(params: {
   workflow_execution_id: string;
@@ -677,7 +680,12 @@ export async function runRepositoryActionActivity(params: {
     workflow_execution_id: params.workflow_execution_id,
     action: params.action,
   };
-  if (params.action === "commit" && params.message !== undefined) {
+  if (
+    (params.action === "commit" ||
+      params.action === "tree_write" ||
+      params.action === "tree_land") &&
+    params.message !== undefined
+  ) {
     request.message = params.message;
   }
 

@@ -568,10 +568,13 @@ export interface ExecuteSystemCommandRequest {
 }
 
 /**
- * One of the workflow interpreter's own repository steps, run on the
- * repository the workflow run holds through RunRepositoryAction.
+ * One of the workflow interpreter's own repository steps, run through
+ * RunRepositoryAction: `diff`, `commit` and `land` on the repository the
+ * workflow run holds; `tree_diff`, `tree_write` and `tree_land` on the
+ * Nuclear Notes tree a carbon-forge run holds (AEGIS ADR-147).
  */
-export type RepositoryAction = "diff" | "commit" | "land";
+export type RepositoryAction =
+  "diff" | "commit" | "land" | "tree_diff" | "tree_write" | "tree_land";
 
 /**
  * gRPC request for RunRepositoryAction. Maps directly to proto
@@ -580,7 +583,10 @@ export type RepositoryAction = "diff" | "commit" | "land";
 export interface RunRepositoryActionRequest {
   workflow_execution_id: string;
   action: RepositoryAction;
-  /** The commit message, for `commit` only. */
+  /**
+   * The message: `commit`'s commit message, `tree_write`'s change message,
+   * `tree_land`'s intent for the landing; absent for the other actions.
+   */
   message?: string;
 }
 
