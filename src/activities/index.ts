@@ -657,7 +657,7 @@ export async function executeSystemCommandActivity(params: {
  * Run one of the workflow interpreter's repository steps (RunRepositoryAction):
  * `diff`, `commit` (with its message) or `land` on the repository the workflow
  * run holds, or `tree_diff`, `tree_write` (with its message) or `tree_land`
- * (with its message, the lane's intent) on the Nuclear Notes tree a
+ * (with its message, the lane's intent) on the Carbon Forge tree a
  * carbon-forge run holds (AEGIS ADR-147), or `tree_cut` and `archive_render`
  * (with the cut's name as the message), `archive_push`, or
  * `archive_deploy_wait` (with its message passed through unchanged, a cut

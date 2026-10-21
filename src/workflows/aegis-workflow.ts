@@ -222,7 +222,7 @@ const RESERVED_BLACKBOARD_KEYS: ReadonlySet<string> = new Set([
  * The repository actions: each maps an `Action` state's action name to the
  * RepositoryAction the orchestrator runs on what the run holds: the
  * repository for the `repository_*` actions, and for carbon-forge's
- * `tree_*` actions (AEGIS ADR-147) the Nuclear Notes tree, written to a lane
+ * `tree_*` actions (AEGIS ADR-147) the Carbon Forge tree, written to a lane
  * of the run's own and landed as one changeset; carbon-forge's `tree_cut`
  * names the landed state as a cut, and carbon-deploy's `archive_render` and
  * `archive_push` render that cut to the git archive and push it, and

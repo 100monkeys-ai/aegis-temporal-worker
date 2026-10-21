@@ -571,7 +571,7 @@ export interface ExecuteSystemCommandRequest {
  * One of the workflow interpreter's own repository steps, run through
  * RunRepositoryAction: `diff`, `commit` and `land` on the repository the
  * workflow run holds; `tree_diff`, `tree_write` and `tree_land` on the
- * Nuclear Notes tree a carbon-forge run holds (AEGIS ADR-147); `tree_cut`,
+ * Carbon Forge tree a carbon-forge run holds (AEGIS ADR-147); `tree_cut`,
  * which names the landed state as a cut, and `archive_render` and
  * `archive_push`, which render a cut to the git archive and push it (AEGIS
  * ADR-149).
