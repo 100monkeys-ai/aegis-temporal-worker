@@ -4105,6 +4105,129 @@ describe("an Action state runs the workflow's own operation", () => {
     });
   });
 
+  // carbon-forge's DRIFT (AEGIS ADR-147 Update
+  // `drift-report-at-the-gate-2026-10-23`): `drift_report` goes through
+  // RunRepositoryAction with no message, the orchestrator's answer is the
+  // state's output field for field, and DRIFT's own transitions take every
+  // outcome on: draft_only (default true) to COMPLETE, else LAND.
+  const driftStates = (): Record<string, unknown> => ({
+    DRIFT: {
+      kind: "Action",
+      action: "drift_report",
+      transitions: [
+        {
+          condition: "custom",
+          expression: "(default input.draft_only true)",
+          target: "COMPLETE",
+        },
+        { condition: "always", target: "LAND" },
+      ],
+    },
+    COMPLETE: {
+      kind: "Action",
+      action: "update_blackboard",
+      args: { outcome: "drafted" },
+      transitions: [],
+    },
+    LAND: {
+      kind: "Action",
+      action: "update_blackboard",
+      args: { outcome: "at the gate" },
+      transitions: [],
+    },
+  });
+
+  it("a DRIFT state's drift_report reaches RunRepositoryAction with no message, and the report's answer is the output unchanged", async () => {
+    const report = JSON.stringify({
+      report_sha256: "9f2c0e1a",
+      findings: [{ class: "seam_changed_without_record", path: "src/a.ts" }],
+      pending: [],
+    });
+    activityMocks.runRepositoryActionActivity.mockResolvedValue({
+      commit_sha: "9f2c0e1a",
+      branch:
+        "seam_changed_without_record=1 seam_changed_with_record=0 pending=0",
+      ref: "code/aegis-platform-deployment",
+      diff: report,
+    });
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(
+        {
+          ...driftStates(),
+          DRIFT: {
+            ...(driftStates().DRIFT as object),
+            args: { message: "carbon-forge: {{input.task}}" },
+          },
+        },
+        "DRIFT",
+      ),
+    );
+
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { task: "name the judge" },
+      tenant_id: "tenant-a",
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
+    expect(activityMocks.runRepositoryActionActivity).toHaveBeenCalledTimes(1);
+    expect(activityMocks.runRepositoryActionActivity).toHaveBeenCalledWith({
+      workflow_execution_id: "exec-123",
+      action: "drift_report",
+      message: undefined,
+      tenant_id: "tenant-a",
+    });
+    expect(result.status).toBe("completed");
+    expect(result.final_state).toBe("COMPLETE");
+    expect(result.blackboard?.DRIFT).toEqual({
+      status: "success",
+      exit_code: 0,
+      output: {
+        commit_sha: "9f2c0e1a",
+        branch:
+          "seam_changed_without_record=1 seam_changed_with_record=0 pending=0",
+        ref: "code/aegis-platform-deployment",
+        diff: report,
+      },
+    });
+  });
+
+  it("a DRIFT state's refusal is its output's sentence and the run goes on to LAND when draft_only is false", async () => {
+    const sentence = "The page .governed-seams has a malformed row: | src/** |";
+    activityMocks.runRepositoryActionActivity.mockResolvedValue({
+      branch: "",
+      ref: "code/aegis-platform-deployment",
+      sentence,
+    });
+    activityMocks.fetchWorkflowDefinition.mockResolvedValue(
+      baseDefinition(driftStates(), "DRIFT"),
+    );
+
+    const result = await aegis_workflow({
+      workflow_id: "wf-1",
+      input: { task: "name the judge", draft_only: false },
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe("completed");
+    expect(result.final_state).toBe("LAND");
+    expect(result.blackboard?.outcome).toBe("at the gate");
+    expect(result.blackboard?.DRIFT).toEqual({
+      status: "failed",
+      exit_code: 1,
+      error: sentence,
+      output: {
+        commit_sha: undefined,
+        branch: "",
+        ref: "code/aegis-platform-deployment",
+        diff: undefined,
+        sentence,
+      },
+    });
+    expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
+  });
+
   it("a repository answer's sentence fails the state with that sentence, and on_failure takes it", async () => {
     const sentence =
       "the remote branch 'main' has commits this run does not have; nothing was landed";
@@ -4180,7 +4303,7 @@ describe("an Action state runs the workflow's own operation", () => {
     expect(result.status).toBe("failed");
     expect(result.final_state).toBe("STEP");
     expect(result.error).toBe(
-      "unknown action 'repository_push'; the actions are update_blackboard, repository_diff, repository_commit, repository_land, tree_diff, tree_write, tree_land, tree_cut, archive_render, archive_push, archive_deploy_wait, image_generate",
+      "unknown action 'repository_push'; the actions are update_blackboard, repository_diff, repository_commit, repository_land, tree_diff, tree_write, drift_report, tree_land, tree_cut, archive_render, archive_push, archive_deploy_wait, image_generate",
     );
     expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
     expect(activityMocks.runRepositoryActionActivity).not.toHaveBeenCalled();
@@ -4398,6 +4521,7 @@ describe("a System state written as an action is refused", () => {
     "repository_land",
     "tree_diff",
     "tree_write",
+    "drift_report",
     "tree_land",
     "tree_cut",
     "archive_render",

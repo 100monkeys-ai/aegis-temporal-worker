@@ -1149,6 +1149,38 @@ describe("runRepositoryActionActivity", () => {
     );
   });
 
+  // carbon-forge's DRIFT (AEGIS ADR-147 Update
+  // `drift-report-at-the-gate-2026-10-23`): `drift_report` takes no argument.
+  it("sends no message for a drift report", async () => {
+    runRepositoryActionMock.mockResolvedValue({
+      commit_sha: "9f2c0e1a",
+      branch:
+        "seam_changed_without_record=0 seam_changed_with_record=0 pending=0",
+      ref: "code/aegis-platform-deployment",
+      diff: "{}",
+    });
+
+    const answer = await activitiesModule.runRepositoryActionActivity({
+      workflow_execution_id: "exec-1",
+      action: "drift_report",
+      message: "ignored",
+      tenant_id: "tenant-a",
+    });
+
+    expect(runRepositoryActionMock).toHaveBeenCalledWith(
+      { workflow_execution_id: "exec-1", action: "drift_report" },
+      "tenant-a",
+    );
+    expect(answer).toEqual({
+      commit_sha: "9f2c0e1a",
+      branch:
+        "seam_changed_without_record=0 seam_changed_with_record=0 pending=0",
+      ref: "code/aegis-platform-deployment",
+      diff: "{}",
+      sentence: undefined,
+    });
+  });
+
   it("sends no message for an archive push", async () => {
     runRepositoryActionMock.mockResolvedValue({
       commit_sha: "abc1234",
