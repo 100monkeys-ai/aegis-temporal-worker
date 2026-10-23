@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 describe("getServiceToken", () => {
-  it("fails at the call, naming the four variables, when no service account is configured", async () => {
+  it("resolves to no token, without throwing at import, when no service account is configured", async () => {
     vi.resetModules();
 
     process.env.DATABASE_URL =
@@ -14,8 +14,8 @@ describe("getServiceToken", () => {
     // Importing must not throw: the worker starts without Keycloak.
     const { getServiceToken } = await import("./token-manager.js");
 
-    await expect(getServiceToken()).rejects.toThrow(
-      /KEYCLOAK_HOST, KEYCLOAK_SYSTEM_REALM, KEYCLOAK_CLIENT_ID and KEYCLOAK_CLIENT_SECRET/,
-    );
+    // The `aegis init` stack has no Keycloak and its orchestrator has no
+    // `spec.iam`, so the call goes out without a token rather than failing.
+    await expect(getServiceToken()).resolves.toBeUndefined();
   });
 });

@@ -8,6 +8,7 @@ import * as protoLoader from "@grpc/proto-loader";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { getServiceToken } from "../auth/token-manager.js";
+import { bearerHeaders } from "../auth/bearer.js";
 import { PROTO_LOADER_OPTIONS, PROTO_PATH } from "./proto-options.js";
 import type {
   ExecuteAgentRequest,
@@ -105,7 +106,7 @@ export async function cancelAgentExecution(
   tenantId?: string,
 ): Promise<void> {
   const token = await getServiceToken();
-  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  const headers: Record<string, string> = bearerHeaders(token);
   if (tenantId) {
     headers["X-Tenant-Id"] = tenantId;
   }
@@ -153,7 +154,7 @@ async function fetchPersistedExecutionStatus(
   const token = await getServiceToken();
   // The service account reads in aegis-system unless it names the tenant the
   // execution belongs to, as ExecuteAgent's metadata does.
-  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  const headers: Record<string, string> = bearerHeaders(token);
   if (tenantId) {
     headers["X-Tenant-Id"] = tenantId;
   }
@@ -382,7 +383,7 @@ class AegisRuntimeClient {
 
     const token = await getServiceToken();
     const metadata = new grpc.Metadata();
-    metadata.add("authorization", `Bearer ${token}`);
+    if (token) metadata.add("authorization", `Bearer ${token}`);
     if (request.tenant_id) {
       metadata.add("x-tenant-id", request.tenant_id);
     }
@@ -768,7 +769,7 @@ class AegisRuntimeClient {
   ): Promise<ExecuteSystemCommandResponse> {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
-    meta.add("authorization", `Bearer ${token}`);
+    if (token) meta.add("authorization", `Bearer ${token}`);
     await this.waitForChannel("ExecuteSystemCommand");
     return new Promise((resolve, reject) => {
       this.client.ExecuteSystemCommand(
@@ -798,7 +799,7 @@ class AegisRuntimeClient {
   ): Promise<ValidateResponse> {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
-    meta.add("authorization", `Bearer ${token}`);
+    if (token) meta.add("authorization", `Bearer ${token}`);
     await this.waitForChannel("ValidateWithJudges");
     return new Promise((resolve, reject) => {
       this.client.ValidateWithJudges(
@@ -832,7 +833,7 @@ class AegisRuntimeClient {
   ): Promise<QueryCortexResponse> {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
-    meta.add("authorization", `Bearer ${token}`);
+    if (token) meta.add("authorization", `Bearer ${token}`);
     await this.waitForChannel("QueryCortexPatterns");
     return new Promise((resolve, reject) => {
       this.client.QueryCortexPatterns(
@@ -862,7 +863,7 @@ class AegisRuntimeClient {
   ): Promise<StoreCortexPatternResponse> {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
-    meta.add("authorization", `Bearer ${token}`);
+    if (token) meta.add("authorization", `Bearer ${token}`);
     await this.waitForChannel("StoreCortexPattern");
     return new Promise((resolve, reject) => {
       this.client.StoreCortexPattern(
@@ -892,7 +893,7 @@ class AegisRuntimeClient {
   ): Promise<StoreTrajectoryPatternResponse> {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
-    meta.add("authorization", `Bearer ${token}`);
+    if (token) meta.add("authorization", `Bearer ${token}`);
     await this.waitForChannel("StoreTrajectoryPattern");
     return new Promise((resolve, reject) => {
       this.client.StoreTrajectoryPattern(
@@ -924,7 +925,7 @@ class AegisRuntimeClient {
   ): Promise<ExecuteContainerRunResponse> {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
-    meta.add("authorization", `Bearer ${token}`);
+    if (token) meta.add("authorization", `Bearer ${token}`);
     if (request.tenant_id) {
       meta.add("x-tenant-id", request.tenant_id);
     }
@@ -967,7 +968,7 @@ class AegisRuntimeClient {
   }): Promise<{ volume_id: string; remote_path: string }> {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
-    meta.add("authorization", `Bearer ${token}`);
+    if (token) meta.add("authorization", `Bearer ${token}`);
     await this.waitForChannel("CreateWorkspaceVolume");
     return new Promise((resolve, reject) => {
       this.client.CreateWorkspaceVolume(
@@ -1004,7 +1005,7 @@ class AegisRuntimeClient {
   }): Promise<void> {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
-    meta.add("authorization", `Bearer ${token}`);
+    if (token) meta.add("authorization", `Bearer ${token}`);
     await this.waitForChannel("DestroyWorkspaceVolume");
     return new Promise((resolve, reject) => {
       this.client.DestroyWorkspaceVolume(
@@ -1037,7 +1038,7 @@ class AegisRuntimeClient {
   ): Promise<InvokeOutputHandlerResponse> {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
-    meta.add("authorization", `Bearer ${token}`);
+    if (token) meta.add("authorization", `Bearer ${token}`);
     if (request.tenant_id) {
       meta.add("x-tenant-id", request.tenant_id);
     }
@@ -1079,7 +1080,7 @@ class AegisRuntimeClient {
   ): Promise<RunRepositoryActionResponse> {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
-    meta.add("authorization", `Bearer ${token}`);
+    if (token) meta.add("authorization", `Bearer ${token}`);
     if (tenantId) {
       meta.add("x-tenant-id", tenantId);
     }
@@ -1128,7 +1129,7 @@ class AegisRuntimeClient {
   ): Promise<RunImageGenerateResponse> {
     const token = await getServiceToken();
     const meta = new grpc.Metadata();
-    meta.add("authorization", `Bearer ${token}`);
+    if (token) meta.add("authorization", `Bearer ${token}`);
     if (tenantId) {
       meta.add("x-tenant-id", tenantId);
     }

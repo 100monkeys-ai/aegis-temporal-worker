@@ -7,6 +7,7 @@ import { ApplicationFailure, Context } from "@temporalio/activity";
 import { logger } from "../logger.js";
 import { aegisRuntimeClient, cancelAgentExecution } from "../grpc/client.js";
 import { getServiceToken } from "../auth/token-manager.js";
+import { bearerHeaders } from "../auth/bearer.js";
 import type {
   ExecuteAgentRequest,
   ExecuteSystemCommandRequest,
@@ -55,9 +56,7 @@ async function resolveAgentId(
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const token = await getServiceToken();
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
-    };
+    const headers: Record<string, string> = bearerHeaders(token);
     if (tenantId) headers["X-Tenant-Id"] = tenantId;
     const resp = await fetch(url, { headers });
 
@@ -173,7 +172,7 @@ export async function agentRunLimitSecondsActivity(params: {
   const orchestratorUrl =
     process.env.AEGIS_ORCHESTRATOR_URL || "http://localhost:8088";
   const token = await getServiceToken();
-  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  const headers: Record<string, string> = bearerHeaders(token);
   if (params.tenantId) headers["X-Tenant-Id"] = params.tenantId;
   const resp = await fetch(
     `${orchestratorUrl}/v1/agents/${encodeURIComponent(agentId)}`,
@@ -258,7 +257,7 @@ async function persistedRunStatus(
   const orchestratorUrl =
     process.env.AEGIS_ORCHESTRATOR_URL || "http://localhost:8088";
   const token = await getServiceToken();
-  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  const headers: Record<string, string> = bearerHeaders(token);
   if (tenantId) headers["X-Tenant-Id"] = tenantId;
   const resp = await fetch(
     `${orchestratorUrl}/v1/executions/${encodeURIComponent(executionId)}`,

@@ -14,13 +14,20 @@ interface TokenResponse {
 
 let cachedToken: string | null = null;
 let tokenExpiresAt: number = 0;
+let warnedNoServiceAccount = false;
 
 /**
- * Returns a valid Bearer token for the temporal-worker service account.
- * Fetches a new token from Keycloak when the cache is empty or within
- * 30 seconds of expiry.
+ * Returns a valid Bearer token for the temporal-worker service account, or
+ * `undefined` when no service account is configured. Fetches a new token from
+ * Keycloak when the cache is empty or within 30 seconds of expiry.
+ *
+ * No service account (none of KEYCLOAK_HOST, KEYCLOAK_SYSTEM_REALM,
+ * KEYCLOAK_CLIENT_ID, KEYCLOAK_CLIENT_SECRET set) is the `aegis init` stack,
+ * which deploys no Keycloak: the worker then calls the orchestrator without a
+ * token, which an orchestrator without `spec.iam` accepts and a production one
+ * refuses with 401. Said once, at the first call, so the log names it.
  */
-export async function getServiceToken(): Promise<string> {
+export async function getServiceToken(): Promise<string | undefined> {
   const now = Date.now();
 
   if (cachedToken !== null && now < tokenExpiresAt) {
@@ -28,7 +35,18 @@ export async function getServiceToken(): Promise<string> {
     return cachedToken;
   }
 
-  const { keycloakHost, realm, clientId, clientSecret } = config.serviceAccount;
+  const serviceAccount = config.serviceAccount;
+  if (!serviceAccount) {
+    if (!warnedNoServiceAccount) {
+      warnedNoServiceAccount = true;
+      logger.warn(
+        "No Keycloak service account is configured (KEYCLOAK_HOST, KEYCLOAK_SYSTEM_REALM, KEYCLOAK_CLIENT_ID and KEYCLOAK_CLIENT_SECRET are unset): calling the orchestrator without a token, which only a node without spec.iam accepts",
+      );
+    }
+    return undefined;
+  }
+
+  const { keycloakHost, realm, clientId, clientSecret } = serviceAccount;
   const tokenUrl = `${keycloakHost}/realms/${realm}/protocol/openid-connect/token`;
 
   logger.info(

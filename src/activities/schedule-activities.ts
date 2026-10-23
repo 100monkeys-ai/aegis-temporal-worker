@@ -17,6 +17,7 @@
 
 import { ApplicationFailure } from "@temporalio/activity";
 import { getServiceToken } from "../auth/token-manager.js";
+import { bearerHeaders } from "../auth/bearer.js";
 import { logger } from "../logger.js";
 
 /** The error type of a fire that may be tried again. */
@@ -76,7 +77,7 @@ export async function fireScheduleActivity(
 ): Promise<FireScheduleResult> {
   const url = scheduleFireUrl(params.schedule_id);
 
-  let token: string;
+  let token: string | undefined;
   try {
     token = await getServiceToken();
   } catch (error) {
@@ -97,7 +98,7 @@ export async function fireScheduleActivity(
     response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...bearerHeaders(token),
         "Content-Type": "application/json",
         "X-Tenant-Id": params.tenant_id,
       },

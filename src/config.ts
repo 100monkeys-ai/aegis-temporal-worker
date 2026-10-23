@@ -50,15 +50,48 @@ const configSchema = z.object({
     level: z.enum(["trace", "debug", "info", "warn", "error"]).default("info"),
   }),
   nodeEnv: z.enum(["development", "production", "test"]).default("development"),
-  serviceAccount: z.object({
-    keycloakHost: z.string(),
-    realm: z.string(),
-    clientId: z.string(),
-    clientSecret: z.string(),
-  }),
+  // Absent when the stack runs without Keycloak (`aegis init` deploys none):
+  // the worker then starts, and getServiceToken fails at the call instead.
+  serviceAccount: z
+    .object({
+      keycloakHost: z.string(),
+      realm: z.string(),
+      clientId: z.string(),
+      clientSecret: z.string(),
+    })
+    .optional(),
 });
 
 export type Config = z.infer<typeof configSchema>;
+
+export const SERVICE_ACCOUNT_VARS = [
+  "KEYCLOAK_HOST",
+  "KEYCLOAK_SYSTEM_REALM",
+  "KEYCLOAK_CLIENT_ID",
+  "KEYCLOAK_CLIENT_SECRET",
+] as const;
+
+/**
+ * The four service-account variables are read together or not at all. None
+ * set means no service account; some set is a misconfiguration named here,
+ * because a Zod path such as `serviceAccount.realm` does not tell an operator
+ * which variable to set.
+ */
+function serviceAccountFromEnv(): Config["serviceAccount"] {
+  const missing = SERVICE_ACCOUNT_VARS.filter((name) => !process.env[name]);
+  if (missing.length === SERVICE_ACCOUNT_VARS.length) return undefined;
+  if (missing.length > 0) {
+    throw new Error(
+      `${SERVICE_ACCOUNT_VARS.join(", ")} are set together or not at all; missing: ${missing.join(", ")}`,
+    );
+  }
+  return {
+    keycloakHost: process.env.KEYCLOAK_HOST as string,
+    realm: process.env.KEYCLOAK_SYSTEM_REALM as string,
+    clientId: process.env.KEYCLOAK_CLIENT_ID as string,
+    clientSecret: process.env.KEYCLOAK_CLIENT_SECRET as string,
+  };
+}
 
 function loadConfig(): Config {
   return configSchema.parse({
@@ -94,12 +127,7 @@ function loadConfig(): Config {
       level: process.env.LOG_LEVEL,
     },
     nodeEnv: process.env.NODE_ENV,
-    serviceAccount: {
-      keycloakHost: process.env.KEYCLOAK_HOST,
-      realm: process.env.KEYCLOAK_SYSTEM_REALM,
-      clientId: process.env.KEYCLOAK_CLIENT_ID,
-      clientSecret: process.env.KEYCLOAK_CLIENT_SECRET,
-    },
+    serviceAccount: serviceAccountFromEnv(),
   });
 }
 

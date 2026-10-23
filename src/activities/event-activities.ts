@@ -1,5 +1,6 @@
 import { logger } from "../logger.js";
 import { getServiceToken } from "../auth/token-manager.js";
+import { bearerHeaders } from "../auth/bearer.js";
 
 export interface PublishEventParams {
   event_type: string;
@@ -49,7 +50,7 @@ export async function publishEventActivity(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+        ...bearerHeaders(token),
       },
       body: JSON.stringify(payload),
     });
