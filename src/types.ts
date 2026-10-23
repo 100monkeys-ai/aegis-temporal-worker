@@ -571,7 +571,9 @@ export interface ExecuteSystemCommandRequest {
  * One of the workflow interpreter's own repository steps, run through
  * RunRepositoryAction: `diff`, `commit` and `land` on the repository the
  * workflow run holds; `tree_diff`, `tree_write` and `tree_land` on the
- * Carbon Forge tree a carbon-forge run holds (AEGIS ADR-147); `tree_cut`,
+ * Carbon Forge tree a carbon-forge run holds (AEGIS ADR-147); `drift_report`,
+ * the drift report of the run's lane, which takes no message (AEGIS ADR-147
+ * Update drift-report-at-the-gate-2026-10-23); `tree_cut`,
  * which names the landed state as a cut, and `archive_render` and
  * `archive_push`, which render a cut to the git archive and push it (AEGIS
  * ADR-149).
@@ -582,6 +584,7 @@ export type RepositoryAction =
   | "land"
   | "tree_diff"
   | "tree_write"
+  | "drift_report"
   | "tree_land"
   | "tree_cut"
   | "archive_render"
@@ -603,7 +606,7 @@ export interface RunRepositoryActionRequest {
    * no_run_grace_seconds 300), or, when its first character is `{`, a JSON
    * object `{"cut": ..., "timeout_seconds": ..., "no_run_grace_seconds": ...}`
    * with `cut` required, parsed by the orchestrator; absent for the other
-   * actions, `archive_push` among them.
+   * actions, `archive_push` and `drift_report` among them.
    */
   message?: string;
 }

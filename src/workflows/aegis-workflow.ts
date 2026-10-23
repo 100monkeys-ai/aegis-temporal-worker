@@ -223,7 +223,10 @@ const RESERVED_BLACKBOARD_KEYS: ReadonlySet<string> = new Set([
  * RepositoryAction the orchestrator runs on what the run holds: the
  * repository for the `repository_*` actions, and for carbon-forge's
  * `tree_*` actions (AEGIS ADR-147) the Carbon Forge tree, written to a lane
- * of the run's own and landed as one changeset; carbon-forge's `tree_cut`
+ * of the run's own and landed as one changeset, `drift_report` that lane's
+ * drift report before the landing, advice the orchestrator answers and the
+ * state passes on unjudged (AEGIS ADR-147 Update
+ * drift-report-at-the-gate-2026-10-23); carbon-forge's `tree_cut`
  * names the landed state as a cut, and carbon-deploy's `archive_render` and
  * `archive_push` render that cut to the git archive and push it, and
  * `archive_deploy_wait` waits for the deploy run the push starts on the
@@ -237,6 +240,7 @@ const REPOSITORY_ACTIONS: Readonly<Record<string, RepositoryAction>> = {
   repository_land: "land",
   tree_diff: "tree_diff",
   tree_write: "tree_write",
+  drift_report: "drift_report",
   tree_land: "tree_land",
   tree_cut: "tree_cut",
   archive_render: "archive_render",
@@ -263,6 +267,7 @@ const ACTIONS = [
   "repository_land",
   "tree_diff",
   "tree_write",
+  "drift_report",
   "tree_land",
   "tree_cut",
   "archive_render",
@@ -319,8 +324,8 @@ async function runRepositoryStep(
     // change message, tree_land's intent for the lane's landing (each the
     // state's args.message), tree_cut's and archive_render's cut name, and
     // archive_deploy_wait's bare cut name or JSON object of its arguments
-    // (each the state's args.cut, else its args.message); archive_push and
-    // the diffs take none.
+    // (each the state's args.cut, else its args.message); archive_push,
+    // drift_report and the diffs take none.
     message:
       action === "commit" ||
       action === "tree_write" ||

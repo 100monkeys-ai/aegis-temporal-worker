@@ -687,7 +687,7 @@ export async function runRepositoryActionActivity(params: {
   // The request's one argument field: the commit message, tree_write's change
   // message, tree_land's intent, tree_cut's and archive_render's cut name,
   // and archive_deploy_wait's message unchanged, never parsed here (AEGIS
-  // ADR-149); archive_push and the diffs send none.
+  // ADR-149); archive_push, drift_report and the diffs send none.
   if (
     (params.action === "commit" ||
       params.action === "tree_write" ||
