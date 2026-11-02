@@ -11,7 +11,7 @@
 # disagrees with it, and CI's Image job fails if the built image runs
 # another Node. The digest is the multi-platform index of node:24-slim as
 # read from Docker Hub on 2026-09-28: Node 24.21.0.
-FROM node:24-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS builder
+FROM node:24-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS builder
 
 WORKDIR /app
 
@@ -29,7 +29,7 @@ RUN npm run build
 
 # ─── Production image ────────────────────────────────────────────────────────
 
-FROM node:24-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
+FROM node:24-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c
 
 WORKDIR /app
 
