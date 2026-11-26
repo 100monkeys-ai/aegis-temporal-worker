@@ -753,6 +753,73 @@ describe("an agent run starts once per step", () => {
     });
   });
 
+  it("retries a run its node lost as a new run: clears the heartbeat details and fails retryable (ADR-152 D5.8)", async () => {
+    for (const reason of [
+      "owner_lost: The cluster node running this execution died",
+      "owner_restarted: The orchestrator restarted while this execution was running",
+    ]) {
+      inActivity({ run_begun: true, execution_id: "run-1" });
+      endedRun("Failed", null, reason);
+
+      const failure = await executeAgentActivity({
+        agentId: AGENT,
+        input: "task",
+        context: {},
+        tenantId: "tenant-a",
+      }).catch((e) => e);
+
+      expect(failure).toBeInstanceOf(ApplicationFailure);
+      expect(failure.type).toBe("AgentRunLost");
+      expect(failure.nonRetryable).toBe(false);
+      expect(heartbeat).toHaveBeenLastCalledWith({ run_begun: false });
+      expect(executeAgentMock).not.toHaveBeenCalled();
+      expect(cancelMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("retries a live run whose stream ends owner_lost, and cancels nothing", async () => {
+    inActivity(undefined);
+    executeAgentMock.mockResolvedValueOnce([
+      {
+        event_type: "ExecutionFailed",
+        execution_id: "run-1",
+        timestamp: "2026-11-26T19:00:00Z",
+        reason: "owner_lost: The cluster node running this execution died",
+        total_iterations: 1,
+      },
+    ]);
+
+    const failure = await executeAgentActivity({
+      agentId: AGENT,
+      input: "task",
+      context: {},
+      tenantId: "tenant-a",
+    }).catch((e) => e);
+
+    expect(failure).toBeInstanceOf(ApplicationFailure);
+    expect(failure.type).toBe("AgentRunLost");
+    expect(failure.nonRetryable).toBe(false);
+    expect(heartbeat).toHaveBeenLastCalledWith({ run_begun: false });
+    expect(cancelMock).not.toHaveBeenCalled();
+  });
+
+  it("answers any other failure of a run as before, not retried", async () => {
+    inActivity({ run_begun: true, execution_id: "run-1" });
+    endedRun("Failed", null, "owner_lostness is not a reason prefix");
+
+    expect(
+      await executeAgentActivity({
+        agentId: AGENT,
+        input: "task",
+        context: {},
+        tenantId: "tenant-a",
+      }),
+    ).toMatchObject({
+      status: "failed",
+      error: "owner_lostness is not a reason prefix",
+    });
+  });
+
   it("answers the error of the failed run an earlier attempt began", async () => {
     inActivity({ run_begun: true, execution_id: "run-1" });
     endedRun("Failed", null, "the model refused the request");
