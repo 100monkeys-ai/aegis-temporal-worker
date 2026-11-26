@@ -225,6 +225,34 @@ function earlierAttemptRun(details: unknown): AgentRunHeartbeat | undefined {
 /** The status a run's record answers once the run has ended. */
 const RUN_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
+/**
+ * The reasons the orchestrator ends a run whose cluster node died or
+ * restarted under it (AEGIS ADR-152 D5.6, D5.7): the run was not resumed, its
+ * container and its in-flight model call died with its node.
+ */
+const RUN_LOST_REASON = /^(owner_lost|owner_restarted):/;
+
+/**
+ * A run its node lost is retried as a new run (ADR-152 D5.8): the activity
+ * clears its heartbeat details, so the next attempt starts a run instead of
+ * re-attaching to the lost one, and fails with a retryable `AgentRunLost`.
+ * The lost run's outbound side effects are bounded by the durable approval
+ * gate (ADR-126): an approved call runs once, keyed by its approval id.
+ */
+function failIfRunLost(
+  error: string | null | undefined,
+  executionId: string | undefined,
+  activity: Context | undefined,
+): void {
+  const lost = error ? RUN_LOST_REASON.exec(error) : null;
+  if (!lost) return;
+  activity?.heartbeat({ run_begun: false });
+  throw ApplicationFailure.retryable(
+    `The agent run${executionId ? ` ${executionId}` : ""} ended ${lost[1]}: its node was lost and it was not resumed; the next attempt starts a new run. (${error})`,
+    "AgentRunLost",
+  );
+}
+
 /** The first wait between two status reads of a re-attached run. */
 const RUN_STATUS_FIRST_POLL_MS = 1_000;
 
@@ -371,6 +399,7 @@ async function reattachToRun(
         };
       }
       if (status && RUN_TERMINAL_STATUSES.has(status)) {
+        failIfRunLost(run.error, executionId, activity);
         return {
           status: "failed",
           error: run.error ?? `Execution reached persisted ${status} state`,
@@ -578,6 +607,11 @@ export async function executeAgentActivity(params: {
     }
 
     if (failedEvent) {
+      failIfRunLost(
+        failedEvent.reason,
+        failedEvent.execution_id || run.execution_id,
+        activity,
+      );
       return {
         status: "failed",
         error: failedEvent.reason || "Unknown error",
@@ -588,6 +622,11 @@ export async function executeAgentActivity(params: {
 
     throw new Error("No completion or failure event received");
   } catch (error) {
+    if (error instanceof ApplicationFailure && error.type === "AgentRunLost") {
+      // Ended by the orchestrator, not by this activity: nothing to cancel,
+      // and retryable by design.
+      throw error;
+    }
     logger.error(
       { error, agent_id: params.agentId, execution_id: run.execution_id },
       "Agent execution activity failed",
