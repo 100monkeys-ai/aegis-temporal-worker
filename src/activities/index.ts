@@ -226,11 +226,11 @@ function earlierAttemptRun(details: unknown): AgentRunHeartbeat | undefined {
 const RUN_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 /**
- * The reasons the orchestrator ends a run whose cluster node died or
- * restarted under it (AEGIS ADR-152 D5.6, D5.7): the run was not resumed, its
- * container and its in-flight model call died with its node.
+ * The reasons the orchestrator ends a run whose cluster node died, restarted
+ * or drained under it (AEGIS ADR-152 D5.6, D5.7, D5.9): the run was not
+ * resumed, its container and its in-flight model call ended with its node.
  */
-const RUN_LOST_REASON = /^(owner_lost|owner_restarted):/;
+const RUN_LOST_REASON = /^(owner_lost|owner_restarted|node_drained):/;
 
 /**
  * A run its node lost is retried as a new run (ADR-152 D5.8): the activity

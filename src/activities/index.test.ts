@@ -757,6 +757,7 @@ describe("an agent run starts once per step", () => {
     for (const reason of [
       "owner_lost: The cluster node running this execution died",
       "owner_restarted: The orchestrator restarted while this execution was running",
+      "node_drained: The cluster node running this execution was stopping",
     ]) {
       inActivity({ run_begun: true, execution_id: "run-1" });
       endedRun("Failed", null, reason);
