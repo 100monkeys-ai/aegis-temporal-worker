@@ -630,6 +630,30 @@ export interface RunRepositoryActionResponse {
 }
 
 /**
+ * gRPC request for RunHostAction (AEGIS ADR-157 D4): a workflow's
+ * host_state_plan, host_state_apply, edge_fleet_invoke or http_check step,
+ * its rendered arguments as one JSON object.
+ */
+export interface RunHostActionRequest {
+  /** The workflow execution the step belongs to. */
+  workflow_execution_id: string;
+  /** host_state_plan, host_state_apply, edge_fleet_invoke or http_check. */
+  action: string;
+  /** The state's rendered arguments, as a JSON object. */
+  args_json: string;
+}
+
+/**
+ * gRPC response from RunHostAction: the action's result as JSON, whether it
+ * did what it was asked, and the orchestrator's refusal when it did not act.
+ */
+export interface RunHostActionResponse {
+  result_json: string;
+  ok: boolean;
+  sentence?: string;
+}
+
+/**
  * gRPC request for RunImageGenerate, the workflow interpreter's own image
  * generation step. Maps directly to proto RunImageGenerateRequest; an optional
  * field the state did not set is absent, never "".
