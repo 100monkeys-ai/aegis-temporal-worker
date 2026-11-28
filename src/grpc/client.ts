@@ -31,6 +31,8 @@ import type {
   RunRepositoryActionResponse,
   RunImageGenerateRequest,
   RunImageGenerateResponse,
+  RunHostActionRequest,
+  RunHostActionResponse,
 } from "../types.js";
 
 // Load protobuf definition
@@ -1123,6 +1125,50 @@ class AegisRuntimeClient {
    * them into the workflow execution's volume. The worker's service account
    * acts in the run's tenant, named by `x-tenant-id`.
    */
+  /** A workflow's host action (AEGIS ADR-157 D4), RunHostAction. */
+  async runHostAction(
+    request: RunHostActionRequest,
+    tenantId?: string,
+  ): Promise<RunHostActionResponse> {
+    const token = await getServiceToken();
+    const meta = new grpc.Metadata();
+    if (token) meta.add("authorization", `Bearer ${token}`);
+    if (tenantId) {
+      meta.add("x-tenant-id", tenantId);
+    }
+    await this.waitForChannel("RunHostAction");
+    return new Promise((resolve, reject) => {
+      this.client.RunHostAction(
+        request,
+        meta,
+        (error: Error | null, response: RunHostActionResponse) => {
+          if (error) {
+            logger.error(
+              {
+                error,
+                workflow_execution_id: request.workflow_execution_id,
+                action: request.action,
+              },
+              "Host action failed",
+            );
+            reject(error);
+          } else {
+            logger.info(
+              {
+                workflow_execution_id: request.workflow_execution_id,
+                action: request.action,
+                ok: response.ok,
+                refused: Boolean(response.sentence),
+              },
+              "Host action answered",
+            );
+            resolve(response);
+          }
+        },
+      );
+    });
+  }
+
   async runImageGenerate(
     request: RunImageGenerateRequest,
     tenantId?: string,

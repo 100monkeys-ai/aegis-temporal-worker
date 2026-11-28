@@ -22,6 +22,7 @@ import type {
   RunRepositoryActionRequest,
   RunRepositoryActionResponse,
   RunImageGenerateRequest,
+  RunHostActionResponse,
   RunImageGenerateResponse,
 } from "../types.js";
 import { fetchWorkflowDefinition } from "./workflow-activities.js";
@@ -749,6 +750,40 @@ export async function runRepositoryActionActivity(params: {
     branch: response.branch ?? "",
     ref: response.ref ?? "",
     diff: response.diff || undefined,
+    sentence: response.sentence || undefined,
+  };
+}
+
+/**
+ * Run a workflow's host action (AEGIS ADR-157 D4) through RunHostAction:
+ * host_state_plan, host_state_apply, edge_fleet_invoke or http_check, its
+ * rendered arguments sent as one JSON object. A refusal is answered, not
+ * thrown, and the workflow fails the state with the orchestrator's sentence.
+ */
+export async function runHostActionActivity(params: {
+  workflow_execution_id: string;
+  action: string;
+  args: Record<string, string>;
+  tenant_id?: string;
+}): Promise<RunHostActionResponse> {
+  logger.info(
+    {
+      workflow_execution_id: params.workflow_execution_id,
+      action: params.action,
+    },
+    "Executing host action activity",
+  );
+  const response = await aegisRuntimeClient.runHostAction(
+    {
+      workflow_execution_id: params.workflow_execution_id,
+      action: params.action,
+      args_json: JSON.stringify(params.args),
+    },
+    params.tenant_id || undefined,
+  );
+  return {
+    result_json: response.result_json || "null",
+    ok: Boolean(response.ok),
     sentence: response.sentence || undefined,
   };
 }

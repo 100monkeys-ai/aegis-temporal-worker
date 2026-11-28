@@ -256,6 +256,30 @@ const REPOSITORY_ACTIONS: Readonly<Record<string, RepositoryAction>> = {
 const IMAGE_ACTION = "image_generate";
 
 /**
+ * The host actions (AEGIS ADR-157 D4): host state and edge fleet steps and a
+ * rollout's health check, run by the orchestrator's RunHostAction under the
+ * run's own authority. host_state_apply and edge_fleet_invoke wait at the
+ * approval gate as the run's person, or run at once on that person's
+ * standing "always allow".
+ */
+const HOST_ACTIONS: ReadonlySet<string> = new Set([
+  "host_state_plan",
+  "host_state_apply",
+  "edge_fleet_invoke",
+  "http_check",
+]);
+
+/**
+ * The activity that runs a host action: an apply over several hosts, one at
+ * a time, or a wait at the approval gate, may take hours, so its limit is
+ * long. It has one attempt: a retry would ask for a second approval.
+ */
+const { runHostActionActivity } = proxyActivities<typeof activities>({
+  startToCloseTimeout: "12 hours",
+  retry: { maximumAttempts: 1 },
+});
+
+/**
  * The workflow's own operations, in the order a refusal names them: an
  * `Action` state names one of these, and the state machine runs it itself,
  * with no model in the loop and never through a shell.
@@ -274,6 +298,10 @@ const ACTIONS = [
   "archive_push",
   "archive_deploy_wait",
   IMAGE_ACTION,
+  "host_state_plan",
+  "host_state_apply",
+  "edge_fleet_invoke",
+  "http_check",
 ] as const;
 
 /**
@@ -397,6 +425,44 @@ async function runImageGenerateStep(
     };
   }
   return { status: "success", exit_code: 0, output };
+}
+
+/**
+ * Runs a host action (AEGIS ADR-157 D4) through the orchestrator's
+ * RunHostAction. The action's result is the state's output; a refusal, or a
+ * result that did not do what it was asked (a failed host, an unhealthy
+ * check), fails the state with the orchestrator's sentence, so its
+ * on_failure transition takes it.
+ */
+async function runHostActionStep(
+  action: string,
+  args: Record<string, string>,
+  executionId: string,
+  blackboard: Blackboard,
+): Promise<any> {
+  const tenantId = (blackboard.tenant_id as string | undefined) || undefined;
+  const answer = await runHostActionActivity({
+    workflow_execution_id: executionId,
+    action,
+    args,
+    ...(tenantId ? { tenant_id: tenantId } : {}),
+  });
+  let result: unknown;
+  try {
+    result = JSON.parse(answer.result_json);
+  } catch {
+    result = answer.result_json;
+  }
+  if (answer.sentence || !answer.ok) {
+    const error = answer.sentence ?? `${action} did not succeed`;
+    return {
+      status: "failed",
+      exit_code: 1,
+      error,
+      output: { result, sentence: error },
+    };
+  }
+  return { status: "success", exit_code: 0, output: { result } };
 }
 
 /**
@@ -1170,6 +1236,14 @@ async function executeState(
       }
       if (state.action === IMAGE_ACTION) {
         return await runImageGenerateStep(args, executionId, blackboard);
+      }
+      if (HOST_ACTIONS.has(state.action)) {
+        return await runHostActionStep(
+          state.action,
+          args,
+          executionId,
+          blackboard,
+        );
       }
       // The message the request carries: a cut's name rides it for tree_cut
       // and archive_render, and archive_deploy_wait's cut name or JSON object,
