@@ -269,6 +269,8 @@ const HOST_ACTIONS: ReadonlySet<string> = new Set([
   "edge_fleet_invoke",
   "http_check",
   "tool_call",
+  "provider_state_plan",
+  "provider_state_apply",
 ]);
 
 /**
@@ -305,6 +307,8 @@ const ACTIONS = [
   "edge_fleet_invoke",
   "http_check",
   "tool_call",
+  "provider_state_plan",
+  "provider_state_apply",
 ] as const;
 
 /**
