@@ -256,17 +256,19 @@ const REPOSITORY_ACTIONS: Readonly<Record<string, RepositoryAction>> = {
 const IMAGE_ACTION = "image_generate";
 
 /**
- * The host actions (AEGIS ADR-157 D4): host state and edge fleet steps and a
- * rollout's health check, run by the orchestrator's RunHostAction under the
- * run's own authority. host_state_apply and edge_fleet_invoke wait at the
- * approval gate as the run's person, or run at once on that person's
- * standing "always allow".
+ * The host actions (AEGIS ADR-157 D4, D11): host state and edge fleet steps,
+ * a rollout's health check, and tool_call (a remote server's tool, such as
+ * cloudflare.execute), run by the orchestrator's RunHostAction under the
+ * run's own authority. host_state_apply, edge_fleet_invoke and a gated
+ * tool_call wait at the approval gate as the run's person, or run at once
+ * on that person's standing "always allow".
  */
 const HOST_ACTIONS: ReadonlySet<string> = new Set([
   "host_state_plan",
   "host_state_apply",
   "edge_fleet_invoke",
   "http_check",
+  "tool_call",
 ]);
 
 /**
@@ -302,6 +304,7 @@ const ACTIONS = [
   "host_state_apply",
   "edge_fleet_invoke",
   "http_check",
+  "tool_call",
 ] as const;
 
 /**

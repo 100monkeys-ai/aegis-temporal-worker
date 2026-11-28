@@ -4303,7 +4303,7 @@ describe("an Action state runs the workflow's own operation", () => {
     expect(result.status).toBe("failed");
     expect(result.final_state).toBe("STEP");
     expect(result.error).toBe(
-      "unknown action 'repository_push'; the actions are update_blackboard, repository_diff, repository_commit, repository_land, tree_diff, tree_write, drift_report, tree_land, tree_cut, archive_render, archive_push, archive_deploy_wait, image_generate, host_state_plan, host_state_apply, edge_fleet_invoke, http_check",
+      "unknown action 'repository_push'; the actions are update_blackboard, repository_diff, repository_commit, repository_land, tree_diff, tree_write, drift_report, tree_land, tree_cut, archive_render, archive_push, archive_deploy_wait, image_generate, host_state_plan, host_state_apply, edge_fleet_invoke, http_check, tool_call",
     );
     expect(activityMocks.executeSystemCommandActivity).not.toHaveBeenCalled();
     expect(activityMocks.runRepositoryActionActivity).not.toHaveBeenCalled();
